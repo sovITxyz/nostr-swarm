@@ -1,0 +1,211 @@
+# nostr-swarm
+
+A fully peer-to-peer Nostr relay that syncs events over Hyperswarm. Every peer is equal -- no central server required.
+
+Built on the [Holepunch](https://holepunch.to) stack: Hyperswarm for connectivity, Autobase for multi-writer consensus, and Hyperbee for indexed storage.
+
+## How it works
+
+- Peers join a shared Hyperswarm topic and replicate a Corestore over encrypted connections
+- Autobase linearizes writes from all peers into a deterministic Hyperbee view
+- Every peer sees the same data -- events, indexes, deletions -- regardless of join order
+- A WebSocket server exposes the standard Nostr relay protocol (NIP-01) for traditional clients
+- Pear Runtime apps can connect directly over Hyperswarm with no WebSocket layer
+
+## Requirements
+
+- Node.js >= 20
+
+## Install
+
+```bash
+npm install
+npm run build
+```
+
+## Usage
+
+```bash
+# Run with defaults (port 3000, storage ./nostr-swarm-data)
+node dist/cli.js
+
+# Custom options
+node dist/cli.js --port 4000 --storage ./data --topic my-relay
+
+# Development
+npm run dev
+```
+
+### CLI options
+
+```
+-p, --port <number>         WebSocket port (default: 3000)
+-s, --storage <path>        Storage directory (default: ./nostr-swarm-data)
+-t, --topic <name>          Swarm topic (default: nostr)
+    --relay-name <name>     Relay name for NIP-11
+    --relay-contact <addr>  Admin contact for NIP-11
+-v, --verbose               Enable debug logging
+-h, --help                  Show help
+```
+
+### Environment variables
+
+All config can also be set via environment variables:
+
+| Variable | Description | Default |
+|---|---|---|
+| `WS_PORT` | WebSocket port | `3000` |
+| `WS_HOST` | Bind address | `0.0.0.0` |
+| `STORAGE_PATH` | Data directory | `./nostr-swarm-data` |
+| `SWARM_TOPIC` | Swarm topic name | `nostr` |
+| `RELAY_NAME` | Relay name (NIP-11) | `nostr-swarm` |
+| `RELAY_DESCRIPTION` | Relay description (NIP-11) | |
+| `RELAY_CONTACT` | Admin contact (NIP-11) | |
+| `RELAY_PUBKEY` | Admin pubkey (NIP-11) | |
+| `MAX_MESSAGE_SIZE` | Max message bytes | `131072` |
+| `MAX_SUBS` | Max subscriptions per connection | `20` |
+| `MAX_FILTERS` | Max filters per REQ | `10` |
+| `EVENT_RATE` | Events per second limit | `10` |
+| `REQ_RATE` | REQs per second limit | `20` |
+
+## Deployment
+
+### Peer-to-peer (native)
+
+Since nostr-swarm uses Hyperswarm for NAT hole-punching, every node is a peer -- no server infrastructure, TLS, or reverse proxy required. Just run the process:
+
+```bash
+node dist/cli.js --topic my-relay --storage /var/lib/nostr-swarm
+```
+
+Multiple nodes joining the same topic will automatically discover each other and replicate.
+
+### Process manager
+
+```bash
+# pm2
+npx pm2 start dist/cli.js --name nostr-swarm -- --port 3000
+
+# systemd
+sudo systemctl enable --now nostr-swarm
+```
+
+Example systemd unit (`/etc/systemd/system/nostr-swarm.service`):
+
+```ini
+[Unit]
+Description=nostr-swarm relay
+After=network.target
+
+[Service]
+Type=simple
+User=nostr
+WorkingDirectory=/opt/nostr-swarm
+ExecStart=/usr/bin/node dist/cli.js
+Environment=WS_PORT=3000
+Environment=STORAGE_PATH=/var/lib/nostr-swarm
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Docker
+
+```dockerfile
+FROM node:22-slim
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+EXPOSE 3000
+VOLUME /data
+CMD ["node", "dist/cli.js", "--storage", "/data"]
+```
+
+### Traditional WebSocket clients
+
+If you need `wss://` for browser-based Nostr clients, put the relay behind a reverse proxy with TLS:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name relay.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+## Pear Runtime client
+
+Pear apps connect directly to the swarm -- no WebSocket layer, no server. Each Pear client is a full peer that replicates the Autobase.
+
+```js
+import Hyperswarm from 'hyperswarm'
+import Corestore from 'corestore'
+import Autobase from 'autobase'
+import Hyperbee from 'hyperbee'
+import { createHash } from 'crypto'
+
+const store = new Corestore('./pear-nostr-data')
+const swarm = new Hyperswarm()
+
+// Same topic derivation as the relay
+const topic = createHash('sha256').update('nostr-swarm:nostr').digest()
+
+// Join and replicate
+swarm.on('connection', (socket) => store.replicate(socket))
+swarm.join(topic, { server: true, client: true })
+
+// Open the shared Autobase view
+const base = new Autobase(store, bootstrapKey, {
+  open: (store) => new Hyperbee(store.get('view'), {
+    keyEncoding: 'utf-8',
+    valueEncoding: 'json',
+  }),
+  apply,
+  valueEncoding: 'json',
+})
+await base.ready()
+
+// Now read/write Nostr events through base.view (Hyperbee)
+```
+
+The bootstrap key from the first Autobase instance needs to be shared so peers can join the same multi-writer base. This can be passed as config or discovered over the swarm protocol.
+
+## Architecture
+
+```
+Nostr clients (WebSocket)
+        |
+   [WS Server] --- NIP-01 protocol
+        |
+   [EventStore] --- Autobase + Hyperbee (indexed storage)
+        |
+   [SwarmNetwork] --- Hyperswarm (P2P replication)
+        |
+   Other relay peers / Pear clients
+```
+
+- **EventStore** -- Autobase-backed Hyperbee with secondary indexes for kind, author, tags, and timestamps
+- **SwarmNetwork** -- joins a Hyperswarm topic and replicates the Corestore over encrypted connections
+- **WS Server** -- standard Nostr relay WebSocket interface (NIP-01, NIP-09, NIP-11, NIP-40, NIP-42, NIP-70)
+
+## Supported NIPs
+
+- **NIP-01** -- Basic protocol flow (events, subscriptions, filters)
+- **NIP-09** -- Event deletion
+- **NIP-11** -- Relay information document
+- **NIP-40** -- Expiration timestamp
+- **NIP-42** -- Authentication
+- **NIP-70** -- Protected events
+
+## License
+
+MIT
