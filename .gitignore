@@ -1,0 +1,5 @@
+node_modules/
+dist/
+nostr-swarm-data/
+*.tsbuildinfo
+.env
