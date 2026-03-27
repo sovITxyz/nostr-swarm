@@ -261,6 +261,71 @@ The relay builds a trust graph from follow lists (kind 3) and mute lists (kind 1
 
 See [Web of Trust](docs/web-of-trust.md) for full details on scoring, muting, discovery, and customization.
 
+## Key Management with keytr
+
+[keytr](https://github.com/sovITxyz/keytr) provides passkey-based Nostr private key management. Instead of copying nsec strings between devices, keytr encrypts your private key with a WebAuthn passkey (Face ID, fingerprint, or hardware key) and publishes the encrypted blob as a kind:30079 event to Nostr relays -- including nostr-swarm peers.
+
+### How it works with nostr-swarm
+
+1. **Register** -- keytr encrypts your nsec using a passkey and publishes a kind:30079 event
+2. **Store** -- nostr-swarm peers replicate and store the encrypted event across the swarm
+3. **Login** -- on any device with the synced passkey, fetch the event from any peer and decrypt your nsec
+
+Since nostr-swarm replicates all events across peers, your encrypted key blob is available from any node in the swarm -- no single relay dependency.
+
+### Setup
+
+```bash
+npm install @sovit.xyz/keytr
+```
+
+```typescript
+import { setupKeytr, publishKeytrEvent } from '@sovit.xyz/keytr'
+import { finalizeEvent } from 'nostr-tools'
+
+// Generate a new nsec and encrypt it with a passkey
+const { credential, encryptedBlob, eventTemplate, nsecBytes, npub } = await setupKeytr({
+  userName: 'alice',
+  userDisplayName: 'Alice',
+})
+
+// Publish the encrypted key event to your nostr-swarm relay
+const signedEvent = finalizeEvent(eventTemplate, nsecBytes)
+await publishKeytrEvent(signedEvent, ['ws://localhost:3000'])
+```
+
+### Login from another device
+
+```typescript
+import { loginWithKeytr, fetchKeytrEvents } from '@sovit.xyz/keytr'
+
+// Fetch your encrypted key event from the swarm relay
+const events = await fetchKeytrEvents(pubkey, ['ws://localhost:3000'])
+
+// Authenticate with your passkey to decrypt
+const { nsecBytes, npub } = await loginWithKeytr(events)
+```
+
+### NIP-07 signing with keytr-connect
+
+[keytr-connect](https://github.com/sovITxyz/keytr-connect) bridges keytr to any Nostr client that supports `window.nostr` (NIP-07):
+
+```typescript
+import { KeytrProvider } from '@sovit.xyz/keytr-connect'
+
+const provider = new KeytrProvider({
+  relayUrls: ['ws://localhost:3000'],
+  rpId: 'keytr.org'
+})
+
+await provider.signup({ userName: 'alice', userDisplayName: 'Alice' })
+provider.install() // Sets window.nostr -- clients can now sign events via passkey
+```
+
+### Backup and recovery
+
+Register backup passkeys on separate gateways (e.g., keytr.org and nostkey.org) so losing one device doesn't mean losing your key. See the [keytr docs](https://github.com/sovITxyz/keytr) for details on the federated gateway model and recovery flows.
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) -- Internal design, storage layer, replication, and protocol details
