@@ -11,6 +11,15 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sovITxyz/nostr-swarm.git"
+  },
+  "author": "sovITxyz",
+  "homepage": "https://github.com/sovITxyz/nostr-swarm#readme",
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsup",
@@ -18,7 +27,8 @@
     "test:watch": "vitest",
     "lint": "biome check src/",
     "lint:fix": "biome check --write src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "nostr",

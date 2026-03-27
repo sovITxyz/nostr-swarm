@@ -19,6 +19,22 @@ Built on the [Holepunch](https://holepunch.to) stack: Hyperswarm for connectivit
 ## Install
 
 ```bash
+# Run directly (no install needed)
+npx nostr-swarm
+
+# Or install globally
+npm install -g nostr-swarm
+nostr-swarm
+
+# Or as a library
+npm install nostr-swarm
+```
+
+### From source
+
+```bash
+git clone https://github.com/sovITxyz/nostr-swarm.git
+cd nostr-swarm
 npm install
 npm run build
 ```
@@ -27,12 +43,12 @@ npm run build
 
 ```bash
 # Run with defaults (port 3000, storage ./nostr-swarm-data)
-node dist/cli.js
+nostr-swarm
 
 # Custom options
-node dist/cli.js --port 4000 --storage ./data --topic my-relay
+nostr-swarm --port 4000 --storage ./data --topic my-relay
 
-# Development
+# Development (from source)
 npm run dev
 ```
 
@@ -90,7 +106,7 @@ All config can also be set via environment variables:
 Since nostr-swarm uses Hyperswarm for NAT hole-punching, every node is a peer -- no server infrastructure, TLS, or reverse proxy required. Just run the process:
 
 ```bash
-node dist/cli.js --topic my-relay --storage /var/lib/nostr-swarm
+nostr-swarm --topic my-relay --storage /var/lib/nostr-swarm
 ```
 
 Multiple nodes joining the same topic will automatically discover each other and replicate.
@@ -99,7 +115,7 @@ Multiple nodes joining the same topic will automatically discover each other and
 
 ```bash
 # pm2
-npx pm2 start dist/cli.js --name nostr-swarm -- --port 3000
+npx pm2 start nostr-swarm -- --port 3000
 
 # systemd
 sudo systemctl enable --now nostr-swarm
@@ -116,7 +132,7 @@ After=network.target
 Type=simple
 User=nostr
 WorkingDirectory=/opt/nostr-swarm
-ExecStart=/usr/bin/node dist/cli.js
+ExecStart=/usr/bin/env nostr-swarm
 Environment=WS_PORT=3000
 Environment=STORAGE_PATH=/var/lib/nostr-swarm
 Restart=always
@@ -229,7 +245,7 @@ Nostr clients (WebSocket)
 Enable WoT filtering to keep your relay focused on socially relevant content:
 
 ```bash
-node dist/cli.js --wot-pubkey <your-64-char-hex-pubkey>
+nostr-swarm --wot-pubkey <your-64-char-hex-pubkey>
 ```
 
 The relay builds a trust graph from follow lists (kind 3) and mute lists (kind 10000), then filters events by social distance:
