@@ -1,27 +1,69 @@
 import goodbye from 'graceful-goodbye'
+import { LightStore } from './light/store.js'
 import { EventStore } from './storage/store.js'
 import { SwarmNetwork } from './swarm/network.js'
-import { loadConfig } from './util/config.js'
+import { loadConfig, loadLightConfig, loadWotConfig } from './util/config.js'
 import { logger } from './util/logger.js'
-import type { RelayConfig } from './util/types.js'
+import type { LightClientConfig, RelayConfig, WotConfig } from './util/types.js'
+import { WotGraph } from './wot/graph.js'
+import { ReplicationPolicyEngine } from './wot/policy.js'
 import { RelayServer } from './ws/server.js'
 
 export class NostrSwarm {
 	readonly config: RelayConfig
+	readonly wotConfig: WotConfig
+	readonly lightConfig: LightClientConfig
 	readonly store: EventStore
 	readonly server: RelayServer
 	readonly network: SwarmNetwork
+	readonly wot: WotGraph | null
+	readonly policy: ReplicationPolicyEngine | null
+	readonly lightStore: LightStore | null
 	private cleanupTimer: ReturnType<typeof setInterval> | null = null
 
-	constructor(configOverrides?: Partial<RelayConfig>) {
-		this.config = loadConfig(configOverrides)
+	constructor(configOverrides?: {
+		relay?: Partial<RelayConfig>
+		wot?: Partial<WotConfig>
+		light?: Partial<LightClientConfig>
+	}) {
+		this.config = loadConfig(configOverrides?.relay)
+		this.wotConfig = loadWotConfig(configOverrides?.wot)
+		this.lightConfig = loadLightConfig(configOverrides?.light)
+
 		this.store = new EventStore(this.config.storagePath)
 		this.server = new RelayServer(this.store, this.config)
 		this.network = new SwarmNetwork(this.store, this.config.topic)
+
+		// Initialize WoT if owner pubkey is configured
+		if (this.wotConfig.ownerPubkey) {
+			this.wot = new WotGraph(this.wotConfig)
+			this.policy = new ReplicationPolicyEngine(this.wot, this.wotConfig)
+		} else {
+			this.wot = null
+			this.policy = null
+		}
+
+		// Initialize light client mode if enabled
+		if (this.lightConfig.enabled && this.wotConfig.ownerPubkey) {
+			this.lightStore = new LightStore(this.store, this.wotConfig, this.lightConfig)
+		} else {
+			this.lightStore = null
+		}
 	}
 
 	async start(): Promise<void> {
-		await this.store.ready()
+		if (this.lightStore) {
+			await this.lightStore.ready()
+		} else {
+			await this.store.ready()
+		}
+
+		// Build WoT graph if configured (and not in light mode, which does its own)
+		if (this.wot && !this.lightStore) {
+			await this.wot.rebuild(this.store.indexes)
+			this.wot.startRefresh(this.store.indexes)
+		}
+
 		await this.server.start()
 		await this.network.start()
 
@@ -43,6 +85,8 @@ export class NostrSwarm {
 			port: this.config.port,
 			topic: this.config.topic,
 			storage: this.config.storagePath,
+			wot: this.wot ? 'enabled' : 'disabled',
+			lightClient: this.lightStore ? 'enabled' : 'disabled',
 		})
 	}
 
@@ -51,9 +95,16 @@ export class NostrSwarm {
 			clearInterval(this.cleanupTimer)
 			this.cleanupTimer = null
 		}
+		if (this.wot && !this.lightStore) {
+			this.wot.stopRefresh()
+		}
 		await this.server.stop()
 		await this.network.stop()
-		await this.store.close()
+		if (this.lightStore) {
+			await this.lightStore.close()
+		} else {
+			await this.store.close()
+		}
 		logger.info('nostr-swarm stopped')
 	}
 

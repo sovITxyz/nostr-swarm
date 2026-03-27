@@ -41,15 +41,17 @@ On top of the P2P layer, each node also runs a standard WebSocket server that sp
 
 ## Startup sequence
 
-The `NostrSwarm` class (`src/relay.ts`) orchestrates startup in three steps:
+The `NostrSwarm` class (`src/relay.ts`) orchestrates startup:
 
-1. **EventStore.ready()** -- Opens the Corestore, initializes the Autobase with its linearized Hyperbee view, and creates all sub-database indexes. The Autobase key is generated on first run and persisted in the Corestore.
+1. **EventStore.ready()** -- Opens the Corestore, initializes the Autobase with its linearized Hyperbee view, and creates all sub-database indexes. The Autobase key is generated on first run and persisted in the Corestore. If light client mode is enabled, `LightStore.ready()` wraps this step and also builds the initial WoT graph.
 
-2. **RelayServer.start()** -- Starts an HTTP server on the configured port/host. The HTTP server serves NIP-11 relay information on `GET` with `Accept: application/nostr+json`, and upgrades WebSocket connections for the Nostr relay protocol.
+2. **WoT graph build** (optional) -- If `WOT_OWNER_PUBKEY` is set, the `WotGraph` scans kind 3 and kind 10000 events to build the trust graph via BFS from the owner pubkey. Periodic refresh begins (default: every 5 minutes). See [Web of Trust](web-of-trust.md) for details.
 
-3. **SwarmNetwork.start()** -- Derives a topic buffer from `sha256("nostr-swarm:" + topic)`, joins the Hyperswarm DHT as both server and client, and begins accepting peer connections. Every incoming peer socket is handed to `corestore.replicate(socket)`.
+3. **RelayServer.start()** -- Starts an HTTP server on the configured port/host. The HTTP server serves NIP-11 relay information on `GET` with `Accept: application/nostr+json`, and upgrades WebSocket connections for the Nostr relay protocol.
 
-Shutdown is the reverse: close all WebSocket connections, leave the swarm, close the Autobase and Corestore.
+4. **SwarmNetwork.start()** -- Derives a topic buffer from `sha256("nostr-swarm:" + topic)`, joins the Hyperswarm DHT as both server and client, and begins accepting peer connections. Every incoming peer socket is handed to `corestore.replicate(socket)`.
+
+Shutdown is the reverse: stop WoT refresh, close all WebSocket connections, leave the swarm, close the Autobase and Corestore.
 
 ## The Holepunch stack
 
@@ -398,6 +400,20 @@ Nostr event kinds are classified into four categories that determine storage and
 
 Replacement tiebreaker: if two events have the same `created_at`, the one with the lexicographically lower `id` wins.
 
+## Web of Trust
+
+nostr-swarm includes an optional Web of Trust (WoT) module that filters events based on social graph distance from a configured owner pubkey. Full documentation is in [Web of Trust](web-of-trust.md). Summary:
+
+- The `WotGraph` (`src/wot/graph.ts`) builds a trust graph from kind 3 (contact list) and kind 10000 (mute list) events via BFS from the owner pubkey.
+- The `ReplicationPolicyEngine` (`src/wot/policy.ts`) evaluates each event: accept with a TTL, or reject.
+- Trust decays with distance: direct follows are kept forever, follows-of-follows for 7 days, 3rd degree for 1 day, unknown pubkeys are rejected.
+- Consensus muting: if 50%+ of your direct follows mute a pubkey, it's treated as muted.
+
+WoT is enabled by setting `WOT_OWNER_PUBKEY`. It works in two modes:
+
+- **Full relay mode** (default): WoT filters incoming events but the relay keeps everything it has already stored. Useful for spam prevention on always-on nodes.
+- **Light client mode** (`LIGHT_CLIENT=true`): WoT filtering + periodic pruning. Events that exceed their trust tier TTL are removed. Designed for phones and constrained devices. See [Client Architecture](clients.md) for details.
+
 ## Configuration
 
 All configuration flows through `src/util/config.ts`. Each setting has three layers of precedence:
@@ -422,6 +438,12 @@ All configuration flows through `src/util/config.ts`. Each setting has three lay
 | Event rate limit | `EVENT_RATE` | -- | 10/sec |
 | REQ rate limit | `REQ_RATE` | -- | 20/sec |
 | Expiration cleanup | `EXPIRATION_CLEANUP_MS` | -- | 60000 (1 min) |
+| WoT owner pubkey | `WOT_OWNER_PUBKEY` | `--wot-pubkey` | (empty -- WoT disabled) |
+| WoT max depth | `WOT_MAX_DEPTH` | `--wot-depth` | 3 |
+| WoT refresh interval | `WOT_REFRESH_MS` | -- | 300000 (5 min) |
+| Light client mode | `LIGHT_CLIENT` | `--light-client` | false |
+| Light max storage | `LIGHT_MAX_STORAGE` | -- | 524288000 (500 MB) |
+| Light prune interval | `LIGHT_PRUNE_MS` | -- | 600000 (10 min) |
 
 ## File map
 
@@ -441,6 +463,13 @@ src/
 ├── swarm/
 │   ├── network.ts          Hyperswarm connection + Corestore replication
 │   └── protocol.ts         Swarm protocol extensions (placeholder)
+├── wot/
+│   ├── graph.ts            WoT trust graph (BFS, degree computation, muting)
+│   ├── policy.ts           Replication policy engine (accept/reject, TTL)
+│   └── index.ts            Barrel exports
+├── light/
+│   ├── store.ts            LightStore (WoT-filtered EventStore wrapper + pruning)
+│   └── index.ts            Barrel exports
 ├── nostr/
 │   ├── events.ts           Event validation, signature verification, classification
 │   ├── filters.ts          Filter validation and matching
@@ -450,11 +479,26 @@ src/
 │   ├── nip-42.ts           Authentication validation
 │   └── nip-70.ts           Protected event helpers
 ├── util/
-│   ├── types.ts            TypeScript interfaces (NostrEvent, NostrFilter, etc.)
-│   ├── config.ts           Configuration loading (env + overrides + defaults)
+│   ├── types.ts            TypeScript interfaces (NostrEvent, NostrFilter, WotConfig, etc.)
+│   ├── config.ts           Configuration loading (relay, WoT, light client)
 │   ├── keys.ts             Hyperbee key encoding (inverted timestamps, composites)
 │   ├── rate-limit.ts       Token bucket rate limiter
 │   └── logger.ts           Structured logger
 └── types/
     └── holepunch.d.ts      Type declarations for Holepunch modules
+
+start9/                         Start9 (StartOS) service package
+├── Dockerfile                  Multi-stage Node.js 22 build
+├── Makefile                    Build targets for .s9pk packaging
+├── manifest.yaml               Service metadata, interfaces, volumes
+├── docker_entrypoint.sh        Reads config, sets env vars, starts relay
+├── instructions.md             User-facing docs for StartOS UI
+└── scripts/
+    ├── embassy.ts              Barrel file for all procedures
+    └── procedures/
+        ├── getConfig.ts        Config form definition + current values
+        ├── setConfig.ts        Writes config to data volume
+        ├── health.ts           Health check (NIP-11 endpoint)
+        ├── properties.ts       Dynamic properties for StartOS UI
+        └── migrations.ts       Version migration logic
 ```
