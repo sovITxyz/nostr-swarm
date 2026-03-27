@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events'
 import type { EventStore } from '../storage/store.js'
+import { eventKey, prefixRange } from '../util/keys.js'
 import { logger } from '../util/logger.js'
 import type { LightClientConfig, NostrEvent, WotConfig } from '../util/types.js'
 import { WotGraph } from '../wot/graph.js'
@@ -19,6 +20,7 @@ export class LightStore extends EventEmitter {
 	readonly store: EventStore
 	readonly wot: WotGraph
 	readonly policy: ReplicationPolicyEngine
+	private readonly wotConfig: WotConfig
 	private readonly lightConfig: LightClientConfig
 	private pruneTimer: ReturnType<typeof setInterval> | null = null
 
@@ -27,6 +29,7 @@ export class LightStore extends EventEmitter {
 		this.store = store
 		this.wot = new WotGraph(wotConfig)
 		this.policy = new ReplicationPolicyEngine(this.wot, wotConfig)
+		this.wotConfig = wotConfig
 		this.lightConfig = lightConfig
 	}
 
@@ -64,9 +67,9 @@ export class LightStore extends EventEmitter {
 	 * Returns true if the event was accepted, false if rejected.
 	 */
 	async putEvent(event: NostrEvent): Promise<boolean> {
-		// Always accept kind 3 (contact lists) and kind 10000 (mute lists)
-		// because these are needed to build the WoT graph itself
-		if (event.kind === 3 || event.kind === 10000) {
+		// Always accept kind 0 (profiles), kind 3 (contact lists), and kind 10000 (mute lists)
+		// Kind 0 enables discoverability; kinds 3/10000 are needed to build the WoT graph
+		if (event.kind === 0 || event.kind === 3 || event.kind === 10000) {
 			await this.store.putEvent(event)
 			return true
 		}
@@ -80,6 +83,19 @@ export class LightStore extends EventEmitter {
 				reason: decision.reason,
 			})
 			return false
+		}
+
+		// Discovery tier: enforce per-pubkey event cap
+		if (decision.discovery) {
+			const count = await this.countAuthorEvents(event.pubkey)
+			if (count >= this.wotConfig.discoveryMaxEventsPerPubkey) {
+				logger.debug('WoT discovery cap reached', {
+					pubkey: event.pubkey.slice(0, 16),
+					count,
+					max: this.wotConfig.discoveryMaxEventsPerPubkey,
+				})
+				return false
+			}
 		}
 
 		await this.store.putEvent(event)
@@ -118,8 +134,8 @@ export class LightStore extends EventEmitter {
 
 			const event = eventEntry.value as NostrEvent
 
-			// Never prune kind 3 or kind 10000 (WoT graph data)
-			if (event.kind === 3 || event.kind === 10000) continue
+			// Never prune kind 0 (profiles), kind 3, or kind 10000 (WoT graph data)
+			if (event.kind === 0 || event.kind === 3 || event.kind === 10000) continue
 
 			if (this.policy.isExpiredByPolicy(event)) {
 				// Append a deletion op to remove this event
@@ -142,5 +158,24 @@ export class LightStore extends EventEmitter {
 				elapsed: `${Date.now() - startTime}ms`,
 			})
 		}
+	}
+
+	/** Count stored events for a pubkey, excluding exempt kinds (0, 3, 10000). */
+	private async countAuthorEvents(pubkey: string): Promise<number> {
+		const subs = this.store.indexes
+		const range = prefixRange(pubkey)
+		const stream = subs.author.createReadStream(range)
+
+		let count = 0
+		for await (const entry of stream) {
+			const eventId = entry.value as string
+			const eventEntry = await subs.events.get(eventKey(eventId))
+			if (!eventEntry) continue
+
+			const event = eventEntry.value as NostrEvent
+			if (event.kind === 0 || event.kind === 3 || event.kind === 10000) continue
+			count++
+		}
+		return count
 	}
 }

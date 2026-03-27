@@ -23,6 +23,9 @@ const wotDefaults: WotConfig = {
 	trustByDegree: { 0: 1.0, 1: 0.8, 2: 0.4, 3: 0.1 },
 	ttlByDegree: { 0: 0, 1: 0, 2: 604800, 3: 86400 }, // 0=forever, 7 days, 1 day
 	refreshIntervalMs: 300_000, // 5 minutes
+	discoveryEnabled: true,
+	discoveryTtl: 7200, // 2 hours
+	discoveryMaxEventsPerPubkey: 5,
 }
 
 const lightDefaults: LightClientConfig = {
@@ -91,6 +94,18 @@ export function loadWotConfig(overrides?: Partial<WotConfig>): WotConfig {
 		refreshIntervalMs: envInt(
 			'WOT_REFRESH_MS',
 			overrides?.refreshIntervalMs ?? wotDefaults.refreshIntervalMs,
+		),
+		discoveryEnabled: envBool(
+			'WOT_DISCOVERY',
+			overrides?.discoveryEnabled ?? wotDefaults.discoveryEnabled,
+		),
+		discoveryTtl: envInt(
+			'WOT_DISCOVERY_TTL',
+			overrides?.discoveryTtl ?? wotDefaults.discoveryTtl,
+		),
+		discoveryMaxEventsPerPubkey: envInt(
+			'WOT_DISCOVERY_MAX_EVENTS',
+			overrides?.discoveryMaxEventsPerPubkey ?? wotDefaults.discoveryMaxEventsPerPubkey,
 		),
 	}
 }

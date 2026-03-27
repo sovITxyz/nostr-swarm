@@ -47,6 +47,9 @@ npm run dev
     --wot-pubkey <hex>      Owner pubkey for Web of Trust filtering
     --wot-depth <number>    Max WoT hops (default: 3)
     --light-client          Enable light client mode (WoT + pruning)
+    --no-discovery          Disable discovery tier for unknown pubkeys
+    --discovery-ttl <secs>  TTL for discovery events (default: 7200)
+    --discovery-max-events <n>  Max events per unknown pubkey (default: 5)
 -v, --verbose               Enable debug logging
 -h, --help                  Show help
 ```
@@ -73,6 +76,9 @@ All config can also be set via environment variables:
 | `WOT_OWNER_PUBKEY` | Owner pubkey for WoT (enables filtering) | |
 | `WOT_MAX_DEPTH` | Trust graph max hops | `3` |
 | `WOT_REFRESH_MS` | WoT graph refresh interval (ms) | `300000` |
+| `WOT_DISCOVERY` | Enable discovery tier for unknown pubkeys | `true` |
+| `WOT_DISCOVERY_TTL` | TTL for discovery events (seconds) | `7200` |
+| `WOT_DISCOVERY_MAX_EVENTS` | Max events per unknown pubkey | `5` |
 | `LIGHT_CLIENT` | Enable light client mode | `false` |
 | `LIGHT_MAX_STORAGE` | Max storage before pruning (bytes) | `524288000` |
 | `LIGHT_PRUNE_MS` | Pruning interval (ms) | `600000` |
@@ -234,9 +240,10 @@ The relay builds a trust graph from follow lists (kind 3) and mute lists (kind 1
 | 1 | Direct follows | Forever |
 | 2 | Follows-of-follows | 7 days |
 | 3 | Third degree | 1 day |
-| -- | Unknown / muted | Rejected |
+| -- | Unknown (discovery) | 2 hours (cap: 5 events) |
+| -- | Muted | Rejected |
 
-See [Web of Trust](docs/web-of-trust.md) for full details on scoring, muting, and customization.
+See [Web of Trust](docs/web-of-trust.md) for full details on scoring, muting, discovery, and customization.
 
 ## Documentation
 

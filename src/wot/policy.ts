@@ -30,6 +30,9 @@ export class ReplicationPolicyEngine {
 
 		// Not in trust graph at all
 		if (score.degree === -1) {
+			if (this.config.discoveryEnabled) {
+				return { action: 'accept', ttl: this.config.discoveryTtl, discovery: true }
+			}
 			return { action: 'reject', reason: 'untrusted' }
 		}
 
