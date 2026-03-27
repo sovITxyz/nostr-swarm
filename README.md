@@ -44,6 +44,9 @@ npm run dev
 -t, --topic <name>          Swarm topic (default: nostr)
     --relay-name <name>     Relay name for NIP-11
     --relay-contact <addr>  Admin contact for NIP-11
+    --wot-pubkey <hex>      Owner pubkey for Web of Trust filtering
+    --wot-depth <number>    Max WoT hops (default: 3)
+    --light-client          Enable light client mode (WoT + pruning)
 -v, --verbose               Enable debug logging
 -h, --help                  Show help
 ```
@@ -67,6 +70,12 @@ All config can also be set via environment variables:
 | `MAX_FILTERS` | Max filters per REQ | `10` |
 | `EVENT_RATE` | Events per second limit | `10` |
 | `REQ_RATE` | REQs per second limit | `20` |
+| `WOT_OWNER_PUBKEY` | Owner pubkey for WoT (enables filtering) | |
+| `WOT_MAX_DEPTH` | Trust graph max hops | `3` |
+| `WOT_REFRESH_MS` | WoT graph refresh interval (ms) | `300000` |
+| `LIGHT_CLIENT` | Enable light client mode | `false` |
+| `LIGHT_MAX_STORAGE` | Max storage before pruning (bytes) | `524288000` |
+| `LIGHT_PRUNE_MS` | Pruning interval (ms) | `600000` |
 
 ## Deployment
 
@@ -109,6 +118,18 @@ Restart=always
 [Install]
 WantedBy=multi-user.target
 ```
+
+### Start9 (StartOS)
+
+nostr-swarm includes a Start9 service package for sovereign self-hosting. See [Start9 Deployment](docs/start9.md) for full details.
+
+```bash
+cd start9
+make
+# Produces nostr-swarm.s9pk for sideloading or marketplace submission
+```
+
+Your Start9 node becomes an always-on relay peer with Tor and LAN access. It automatically discovers and replicates with other peers on the same swarm topic.
 
 ### Docker
 
@@ -196,6 +217,33 @@ Nostr clients (WebSocket)
 - **EventStore** -- Autobase-backed Hyperbee with secondary indexes for kind, author, tags, and timestamps
 - **SwarmNetwork** -- joins a Hyperswarm topic and replicates the Corestore over encrypted connections
 - **WS Server** -- standard Nostr relay WebSocket interface (NIP-01, NIP-09, NIP-11, NIP-40, NIP-42, NIP-70)
+
+## Web of Trust
+
+Enable WoT filtering to keep your relay focused on socially relevant content:
+
+```bash
+node dist/cli.js --wot-pubkey <your-64-char-hex-pubkey>
+```
+
+The relay builds a trust graph from follow lists (kind 3) and mute lists (kind 10000), then filters events by social distance:
+
+| Degree | Who | Kept for |
+|--------|-----|----------|
+| 0 | You | Forever |
+| 1 | Direct follows | Forever |
+| 2 | Follows-of-follows | 7 days |
+| 3 | Third degree | 1 day |
+| -- | Unknown / muted | Rejected |
+
+See [Web of Trust](docs/web-of-trust.md) for full details on scoring, muting, and customization.
+
+## Documentation
+
+- [Architecture](docs/architecture.md) -- Internal design, storage layer, replication, and protocol details
+- [Client Architecture](docs/clients.md) -- How WebSocket clients and Pear Runtime clients connect and differ
+- [Web of Trust](docs/web-of-trust.md) -- Trust graph filtering, scoring tiers, and pruning
+- [Start9 Deployment](docs/start9.md) -- Packaging and running on StartOS
 
 ## Supported NIPs
 

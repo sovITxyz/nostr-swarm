@@ -84,4 +84,44 @@ export interface RelayInfo {
 }
 
 /** Swarm protocol messages between peers */
-export type SwarmMessage = { type: 'event_notify'; id: string }
+export type SwarmMessage =
+	| { type: 'event_notify'; id: string }
+	| { type: 'bootstrap_key'; key: string }
+
+/** Web of Trust configuration */
+export interface WotConfig {
+	/** This relay's owner pubkey — the root of the trust graph */
+	ownerPubkey: string
+	/** Max hops from owner to consider trusted (default: 3) */
+	maxDepth: number
+	/** Trust scores by degree of separation */
+	trustByDegree: Record<number, number>
+	/** How long to keep events from each trust tier (seconds, 0 = forever) */
+	ttlByDegree: Record<number, number>
+	/** How often to rebuild the trust graph (ms) */
+	refreshIntervalMs: number
+}
+
+/** Trust tier for a pubkey */
+export interface TrustScore {
+	pubkey: string
+	degree: number
+	score: number
+	/** Whether this pubkey is explicitly muted */
+	muted: boolean
+}
+
+/** Replication policy decision */
+export type ReplicationPolicy =
+	| { action: 'accept'; ttl: number | null }
+	| { action: 'reject'; reason: string }
+
+/** Light client configuration */
+export interface LightClientConfig {
+	/** Enable light client mode (sparse replication + WoT filtering) */
+	enabled: boolean
+	/** Max storage in bytes before pruning kicks in (default: 500MB) */
+	maxStorageBytes: number
+	/** How often to run the pruning job (ms) */
+	pruneIntervalMs: number
+}
