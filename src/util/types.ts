@@ -100,6 +100,12 @@ export interface WotConfig {
 	ttlByDegree: Record<number, number>
 	/** How often to rebuild the trust graph (ms) */
 	refreshIntervalMs: number
+	/** Enable discovery tier for unknown pubkeys (default: true when WoT is enabled) */
+	discoveryEnabled: boolean
+	/** TTL for events from unknown pubkeys, in seconds (default: 7200 = 2 hours) */
+	discoveryTtl: number
+	/** Max events stored per unknown pubkey (kind 0/3/10000 exempt) (default: 5) */
+	discoveryMaxEventsPerPubkey: number
 }
 
 /** Trust tier for a pubkey */
@@ -113,7 +119,7 @@ export interface TrustScore {
 
 /** Replication policy decision */
 export type ReplicationPolicy =
-	| { action: 'accept'; ttl: number | null }
+	| { action: 'accept'; ttl: number | null; discovery?: boolean }
 	| { action: 'reject'; reason: string }
 
 /** Light client configuration */
