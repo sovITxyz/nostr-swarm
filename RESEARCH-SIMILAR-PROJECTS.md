@@ -152,64 +152,65 @@ Hypertuna is an early proof-of-concept that demonstrates the basic idea of runni
 
 ## Deep Dive: nostr-swarm vs. Hyperpipe
 
-Hyperpipe (by squip) is the **evolution of Hypertuna**, rebranded around September 2025. It has grown from a simple proof-of-concept into a full application platform with 329 commits and 4 releases (latest: desktop-v0.1.4, April 1, 2026).
+**IMPORTANT CORRECTION**: Hyperpipe is **not a Nostr relay**. Upon closer inspection, `hyperpipe-core` implements a **custom binary protocol** over Protomux with HTTP-like request/response semantics — not the Nostr relay protocol (NIP-01). It uses Nostr keypairs (npub/nsec) for identity and cryptographic signing only. Standard Nostr clients cannot connect to it directly.
 
-### Hyperpipe Architecture
+### What Hyperpipe Actually Is
+
+Hyperpipe (by squip) is the **evolution of Hypertuna**, rebranded around September 2025. It is a **custom P2P platform built on Hyperswarm** that borrows Nostr's identity layer but implements its own proprietary protocol. It has 329 commits and 4 releases (latest: desktop-v0.1.4, April 1, 2026).
 
 A monorepo (`squip/hyperpipe`) containing six workspace packages:
 
-| Package | npm Scope | Purpose |
-|---|---|---|
-| `hyperpipe-core` | `@squip/hyperpipe-core` | Runtime engine — relay protocol, crypto, storage |
-| `hyperpipe-core-host` | `@squip/hyperpipe-core-host` | Versioned runtime launcher |
-| `hyperpipe-bridge` | `@squip/hyperpipe-bridge` | Shared integration layer (auth, config, discovery, plugins, UI helpers) |
-| `hyperpipe-desktop` | (Electron app) | GUI desktop client |
-| `hyperpipe-tui` | (npm portable bundle) | Terminal UI client with 40+ commands |
-| `hyperpipe-gateway` | (Docker container) | Public HTTPS/WSS edge service for hosted relays |
+| Package | Purpose |
+|---|---|
+| `hyperpipe-core` | Runtime engine — **custom Protomux binary protocol**, crypto, storage (uses `nostr-tools` for key management only) |
+| `hyperpipe-core-host` | Versioned runtime launcher |
+| `hyperpipe-bridge` | Shared integration layer (auth, config, discovery, plugins, UI helpers) |
+| `hyperpipe-desktop` | Electron GUI client |
+| `hyperpipe-tui` | Terminal UI client with 40+ commands |
+| `hyperpipe-gateway` | Public HTTPS/WSS edge service — **the only component that speaks Nostr protocol** (uses `@nostr-dev-kit/ndk` + `@nostr-dev-kit/wot`) |
 
-Key dependencies:
-- **Core**: hypercore 10.38.2, hyperbee 2.26.5, hyperdrive, autobase 6.5.13, corestore 6.18.4, @noble/curves, express, ws
-- **Gateway**: hyperswarm, hyperbee, corestore, @nostr-dev-kit/ndk, @nostr-dev-kit/wot, redis, prom-client
+### The Nostr Misconception
 
-### Evolution Timeline
+- `hyperpipe-core` relay protocol: **custom binary Protomux** (GET/POST/paths/headers/bodies) — NOT NIP-01
+- GitHub code search for "nip" or "NIP-" in hyperpipe-core: **zero results**
+- `@nostr-dev-kit/ndk` is a dependency of `hyperpipe-gateway` only, not the core
+- `hyperpipe-core` depends on `nostr-tools` solely for npub/nsec key encoding and Schnorr signatures
+- No NIP-09, NIP-11, NIP-40, NIP-42, NIP-70, or any other NIP implementation in the core
 
-1. **Apr 2025**: `hypertuna-relay-server` — simple PoC relay on Pear stack
-2. **Apr 2025**: `hypertuna-proxy-server` — WSS bridge for standard Nostr clients
-3. **Apr-May 2025**: `hypertuna-relay-manager-client` — Pear desktop management app
-4. **May-Aug 2025**: `hypertuna-dev` — development monorepo with desktop + worker
-5. **Sep 2025+**: `hyperpipe` — rebrand, monorepo restructure, full platform buildout
-6. **Mar-Apr 2026**: Mirror repos published, 4th release (desktop-v0.1.4)
+Only `hyperpipe-gateway` bridges between the proprietary Hyperpipe network and standard Nostr clients.
 
 ### Comparison
 
 | Aspect | nostr-swarm | Hyperpipe |
 |---|---|---|
-| **Scope** | Focused library/CLI | Full platform (desktop, TUI, gateway, plugins) |
+| **Protocol** | Standard Nostr (NIP-01 WebSocket JSON) | Custom binary Protomux protocol |
+| **Nostr compatibility** | Native — any Nostr client connects directly | Gateway bridge required for Nostr clients |
+| **NIP support** | NIP-01, 09, 11, 40, 42, 45, 70 | None in core; gateway provides basic NIP-01 |
+| **Use of Nostr** | Full relay implementation | Identity layer only (npub/nsec keys) |
+| **Scope** | Focused relay library/CLI | Full platform (desktop, TUI, gateway, plugins) |
+| **Holepunch stack** | Latest (autobase 7, corestore 7) | Older (autobase 6, corestore 6) |
 | **Architecture** | Single package | Monorepo with 6+ packages |
-| **Holepunch stack** | Latest (autobase 7, corestore 7) | Slightly older (autobase 6, corestore 6) |
-| **Client access** | Direct WS relay — every peer is a relay | Electron desktop, TUI, or public gateway |
-| **Gateway** | None needed (each peer serves WS directly) | Full gateway with token auth, WoT, allowlist/blocklist, rate limiting, Redis, metrics |
-| **Nostr library** | `nostr-tools` | `@nostr-dev-kit/ndk` + `@nostr-dev-kit/wot` |
-| **Plugin system** | No | Yes (marketplace) |
-| **Distribution** | npm, Docker, Start9/StartOS | npm, Electron, Docker, portable TUI bundles |
-| **Activity** | Early stage | 329 commits, 4 releases, very active |
-| **License** | MIT | Apache-2.0 (core/gateway/bridge), MIT (desktop) |
 
-### Key Philosophical Difference
+### Assessment
 
-**nostr-swarm** is a lightweight, embeddable P2P relay where every peer is equal and any developer can run or integrate it. It's a building block.
+Hyperpipe is **not a direct competitor** to nostr-swarm. It is a different kind of project:
+- nostr-swarm is a **Nostr relay** that happens to use Hyperswarm for P2P transport
+- Hyperpipe is a **custom P2P platform** that happens to use Nostr keys for identity
 
-**Hyperpipe** is a full end-user platform with managed relay hosting, desktop/terminal UIs, gateway infrastructure, and a plugin ecosystem. It's an application.
+nostr-swarm is standards-compliant and interoperable with the entire Nostr ecosystem. Hyperpipe has built a proprietary protocol that requires its own gateway to talk to Nostr clients. This makes nostr-swarm more aligned with the Nostr community's values of openness and interoperability.
 
-Both use the same fundamental building blocks (Hyperswarm, Autobase, Hyperbee) but target different audiences:
-- nostr-swarm → developers building decentralized infrastructure
-- Hyperpipe → end users wanting a turnkey P2P Nostr experience
+### Interesting Ideas Worth Noting
 
-nostr-swarm has a technical edge in using the latest Holepunch stack (autobase 7 with improved linearization, corestore 7), while Hyperpipe has a broader feature set and more polished UX.
+Despite not being a Nostr relay, Hyperpipe has some infrastructure concepts that could inspire features in nostr-swarm:
+- **Writer lease envelopes** — cryptographically signed, time-limited write access (useful for multi-writer relay management)
+- **Blind peering** — relay data through intermediaries for privacy
+- **Fast-forward checkpointing** — accelerate sync on reconnect
+- **Allowlist/blocklist with hot-reload** — simple moderation on top of WoT
+
+These are protocol-agnostic infrastructure patterns, not Nostr-specific features.
 
 ## Conclusion
 
-nostr-swarm is not the only project in this space, but the specific combination of Hyperswarm + Autobase + Web of Trust filtering + light client support + dual transport makes it a distinctive and more feature-complete implementation compared to alternatives. Its closest competitors are:
+nostr-swarm is the most complete **true Nostr relay** in the P2P space. Its closest actual competitor is **hyper-nostr**, which shares the same Hyperswarm + Autobase architecture but is older and less feature-rich.
 
-- **hyper-nostr**: Same core stack, but older and less feature-rich
-- **Hyperpipe**: Same developer as Hypertuna, evolved into a full platform — broader scope but uses older Holepunch versions and targets end-users rather than developers
+Hyperpipe (evolved from Hypertuna) is a broader P2P platform that uses Nostr keys for identity but implements its own proprietary protocol — making it a different category of project rather than a direct competitor. Standard Nostr clients cannot connect to Hyperpipe without its gateway bridge.
