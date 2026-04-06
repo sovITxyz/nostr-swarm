@@ -84,6 +84,72 @@ While hyper-nostr shares the same core technology stack, nostr-swarm differentia
 - Start9/StartOS packaging for self-hosting
 - Dual client support (WebSocket + native Hyperswarm)
 
+## Deep Dive: nostr-swarm vs. Hypertuna
+
+Hypertuna (by squip) is a three-repo suite created April 2025, all labeled proof-of-concept / work-in-progress with 0 stars each:
+
+- **hypertuna-relay-server** — the core P2P relay (7 commits, last updated 2025-04-27)
+- **hypertuna-proxy-server** — WebSocket-to-Hyperswarm bridge for standard Nostr clients (7 commits)
+- **hypertuna-relay-manager-client** — Pear desktop app for relay management (12 commits)
+
+### Architecture Comparison
+
+| Aspect | nostr-swarm | Hypertuna |
+|---|---|---|
+| **Language** | TypeScript | JavaScript (.mjs) |
+| **Holepunch stack** | autobase 7, corestore 7 (latest) | autobase 6, corestore 6 (older) |
+| **Nostr library** | `nostr-tools` v2.23.3 | Manual crypto (noble-secp256k1, tweetnacl, sodium-native) |
+| **Storage** | Hyperbee with multi-index (6 indexes) | Autobee (Autobase + Hyperbee) with composite keys |
+| **Client access** | Direct WebSocket relay (NIP-01 native) | Requires separate proxy server to bridge WS → HTTP → Hyperswarm |
+| **Peer communication** | Direct Hyperswarm replication | HTTP forwarding via hypertele tunnels + Express REST API |
+| **NIP support** | NIP-01, 09, 11, 40, 42, 45, 70 | NIP-01 (partial) only |
+| **Web of Trust** | Built-in (BFS trust graph, consensus muting, per-degree TTLs) | None |
+| **Light client mode** | Yes (WoT-aware pruning, discovery caps) | None |
+| **Event indexing** | 6 dedicated sub-databases (events, kind, author, author_kind, tag, createdAt) + replaceable/addressable/expiration/deletion indexes | Single composite key format (`kind:created_at:id`) |
+| **Auth** | NIP-42 challenge-response | None |
+| **Deletion** | NIP-09 with author verification | None |
+| **Expiration** | NIP-40 with cleanup timer | None |
+| **Relay info** | NIP-11 document endpoint | None |
+| **Identity** | Standard Nostr keypair | PBKDF2-SHA256 derived keys per relay |
+| **Deployment** | Single process (relay + WS server) | Three separate components (relay server + proxy + client) |
+| **Self-hosting** | Start9/StartOS package | VPS with registered domain recommended |
+| **Maturity** | Active development, comprehensive test suite | Proof-of-concept, 0 stars, minimal activity |
+
+### Key Architectural Differences
+
+**1. Client Connectivity Model**
+
+nostr-swarm is a **native Nostr relay** — standard Nostr clients connect directly via WebSocket and speak NIP-01. Every peer is a fully functional relay.
+
+Hypertuna requires a **centralized proxy server** to bridge standard Nostr clients to the P2P swarm. The proxy is a single point of failure that routes WebSocket messages to peers via HTTP REST calls through hypertele tunnels. This re-introduces centralization at the access layer.
+
+**2. Replication Strategy**
+
+nostr-swarm uses Hyperswarm's built-in Corestore replication — when peers connect, they call `corestore.replicate(socket)` for automatic, efficient core-level sync. Autobase 7 provides deterministic linearization.
+
+Hypertuna uses HTTP message forwarding between peers via Express endpoints and hypertele tunnels. Events are POSTed between peers rather than using native Hypercore replication, which is less efficient and doesn't leverage the full power of the Holepunch stack.
+
+**3. Query Capability**
+
+nostr-swarm has a sophisticated query engine that chooses the most selective index path (IDs → author+kind → author → kind → scan) with time range filtering and post-filtering.
+
+Hypertuna uses simple composite key lookups (`kind:created_at:id`) with basic range scanning. No query optimization or multi-index selection.
+
+**4. Spam/Trust Management**
+
+nostr-swarm's Web of Trust system provides social-graph-based content filtering with configurable trust degrees, consensus muting, per-tier TTLs, and automatic pruning for light clients.
+
+Hypertuna has no spam or trust management — all events from all peers are accepted unconditionally.
+
+### Summary
+
+Hypertuna is an early proof-of-concept that demonstrates the basic idea of running a Nostr relay over Hyperswarm. nostr-swarm is a significantly more mature and feature-complete implementation that:
+- Uses the latest Holepunch stack versions
+- Provides native WebSocket relay access (no proxy needed)
+- Implements 7 NIPs vs. partial NIP-01 only
+- Includes sophisticated query indexing, Web of Trust filtering, and light client support
+- Leverages native Hypercore replication instead of HTTP forwarding
+
 ## Conclusion
 
 nostr-swarm is not the only project in this space, but the specific combination of Hyperswarm + Autobase + Web of Trust filtering + light client support + dual transport makes it a distinctive and more feature-complete implementation compared to alternatives.
