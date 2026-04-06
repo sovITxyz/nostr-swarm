@@ -150,6 +150,66 @@ Hypertuna is an early proof-of-concept that demonstrates the basic idea of runni
 - Includes sophisticated query indexing, Web of Trust filtering, and light client support
 - Leverages native Hypercore replication instead of HTTP forwarding
 
+## Deep Dive: nostr-swarm vs. Hyperpipe
+
+Hyperpipe (by squip) is the **evolution of Hypertuna**, rebranded around September 2025. It has grown from a simple proof-of-concept into a full application platform with 329 commits and 4 releases (latest: desktop-v0.1.4, April 1, 2026).
+
+### Hyperpipe Architecture
+
+A monorepo (`squip/hyperpipe`) containing six workspace packages:
+
+| Package | npm Scope | Purpose |
+|---|---|---|
+| `hyperpipe-core` | `@squip/hyperpipe-core` | Runtime engine — relay protocol, crypto, storage |
+| `hyperpipe-core-host` | `@squip/hyperpipe-core-host` | Versioned runtime launcher |
+| `hyperpipe-bridge` | `@squip/hyperpipe-bridge` | Shared integration layer (auth, config, discovery, plugins, UI helpers) |
+| `hyperpipe-desktop` | (Electron app) | GUI desktop client |
+| `hyperpipe-tui` | (npm portable bundle) | Terminal UI client with 40+ commands |
+| `hyperpipe-gateway` | (Docker container) | Public HTTPS/WSS edge service for hosted relays |
+
+Key dependencies:
+- **Core**: hypercore 10.38.2, hyperbee 2.26.5, hyperdrive, autobase 6.5.13, corestore 6.18.4, @noble/curves, express, ws
+- **Gateway**: hyperswarm, hyperbee, corestore, @nostr-dev-kit/ndk, @nostr-dev-kit/wot, redis, prom-client
+
+### Evolution Timeline
+
+1. **Apr 2025**: `hypertuna-relay-server` — simple PoC relay on Pear stack
+2. **Apr 2025**: `hypertuna-proxy-server` — WSS bridge for standard Nostr clients
+3. **Apr-May 2025**: `hypertuna-relay-manager-client` — Pear desktop management app
+4. **May-Aug 2025**: `hypertuna-dev` — development monorepo with desktop + worker
+5. **Sep 2025+**: `hyperpipe` — rebrand, monorepo restructure, full platform buildout
+6. **Mar-Apr 2026**: Mirror repos published, 4th release (desktop-v0.1.4)
+
+### Comparison
+
+| Aspect | nostr-swarm | Hyperpipe |
+|---|---|---|
+| **Scope** | Focused library/CLI | Full platform (desktop, TUI, gateway, plugins) |
+| **Architecture** | Single package | Monorepo with 6+ packages |
+| **Holepunch stack** | Latest (autobase 7, corestore 7) | Slightly older (autobase 6, corestore 6) |
+| **Client access** | Direct WS relay — every peer is a relay | Electron desktop, TUI, or public gateway |
+| **Gateway** | None needed (each peer serves WS directly) | Full gateway with token auth, WoT, allowlist/blocklist, rate limiting, Redis, metrics |
+| **Nostr library** | `nostr-tools` | `@nostr-dev-kit/ndk` + `@nostr-dev-kit/wot` |
+| **Plugin system** | No | Yes (marketplace) |
+| **Distribution** | npm, Docker, Start9/StartOS | npm, Electron, Docker, portable TUI bundles |
+| **Activity** | Early stage | 329 commits, 4 releases, very active |
+| **License** | MIT | Apache-2.0 (core/gateway/bridge), MIT (desktop) |
+
+### Key Philosophical Difference
+
+**nostr-swarm** is a lightweight, embeddable P2P relay where every peer is equal and any developer can run or integrate it. It's a building block.
+
+**Hyperpipe** is a full end-user platform with managed relay hosting, desktop/terminal UIs, gateway infrastructure, and a plugin ecosystem. It's an application.
+
+Both use the same fundamental building blocks (Hyperswarm, Autobase, Hyperbee) but target different audiences:
+- nostr-swarm → developers building decentralized infrastructure
+- Hyperpipe → end users wanting a turnkey P2P Nostr experience
+
+nostr-swarm has a technical edge in using the latest Holepunch stack (autobase 7 with improved linearization, corestore 7), while Hyperpipe has a broader feature set and more polished UX.
+
 ## Conclusion
 
-nostr-swarm is not the only project in this space, but the specific combination of Hyperswarm + Autobase + Web of Trust filtering + light client support + dual transport makes it a distinctive and more feature-complete implementation compared to alternatives.
+nostr-swarm is not the only project in this space, but the specific combination of Hyperswarm + Autobase + Web of Trust filtering + light client support + dual transport makes it a distinctive and more feature-complete implementation compared to alternatives. Its closest competitors are:
+
+- **hyper-nostr**: Same core stack, but older and less feature-rich
+- **Hyperpipe**: Same developer as Hypertuna, evolved into a full platform — broader scope but uses older Holepunch versions and targets end-users rather than developers
