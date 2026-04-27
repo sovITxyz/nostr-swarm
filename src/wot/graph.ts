@@ -230,10 +230,16 @@ export class WotGraph extends EventEmitter {
 
 		let current = queue.shift()
 		while (current) {
-			if (current.depth >= this.config.maxDepth) continue
+			if (current.depth >= this.config.maxDepth) {
+				current = queue.shift()
+				continue
+			}
 
 			const follows = this.follows.get(current.pubkey)
-			if (!follows) continue
+			if (!follows) {
+				current = queue.shift()
+				continue
+			}
 
 			for (const followed of follows) {
 				if (this.degrees.has(followed)) continue // already visited at a shorter path
