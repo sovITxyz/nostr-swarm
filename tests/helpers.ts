@@ -2,19 +2,69 @@ import { randomBytes } from 'node:crypto'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure'
+import createTestnet from 'hyperdht/testnet.js'
+import { finalizeEvent, generateSecretKey, getPublicKey } from 'nostr-tools/pure'
+import WebSocket from 'ws'
 import { NostrSwarm } from '../src/relay.js'
 import type { LightClientConfig, NostrEvent, RelayConfig, WotConfig } from '../src/util/types.js'
-import WebSocket from 'ws'
+
+// Env vars beat constructor overrides in loadConfig, so a polluted shell would
+// silently break test isolation. Scrub everything the tests control explicitly.
+for (const name of ['SWARM_TOPIC', 'WS_PORT', 'STORAGE_PATH', 'BOOTSTRAP_KEY', 'ADMIT_WRITERS']) {
+	delete process.env[name]
+}
+
+type Testnet = Awaited<ReturnType<typeof createTestnet>>
+
+let testnetPromise: Promise<Testnet> | null = null
+
+/**
+ * Suite-singleton local hyperdht testnet (3 nodes on loopback UDP).
+ * Tests must NEVER touch the public DHT. Call destroyTestnet() in afterAll —
+ * the nodes bind real sockets and vitest leaks handles otherwise.
+ */
+export function getTestnet(): Promise<Testnet> {
+	if (!testnetPromise) {
+		testnetPromise = createTestnet(3)
+	}
+	return testnetPromise
+}
+
+/** Destroy the suite's testnet (afterAll, after every relay has stopped) */
+export async function destroyTestnet(): Promise<void> {
+	if (!testnetPromise) return
+	const tn = await testnetPromise
+	testnetPromise = null
+	await tn.destroy()
+}
+
+/** Poll a predicate until it returns true or the timeout elapses */
+export async function waitFor(
+	predicate: () => boolean | Promise<boolean>,
+	opts: { timeout?: number; interval?: number } = {},
+): Promise<void> {
+	const timeout = opts.timeout ?? 10_000
+	const interval = opts.interval ?? 50
+	const deadline = Date.now() + timeout
+	for (;;) {
+		if (await predicate()) return
+		if (Date.now() >= deadline) {
+			throw new Error(`waitFor: condition not met within ${timeout}ms`)
+		}
+		await new Promise((resolve) => setTimeout(resolve, interval))
+	}
+}
 
 /** Generate a valid signed Nostr event */
-export function createSignedEvent(overrides: {
-	kind?: number
-	content?: string
-	tags?: string[][]
-	created_at?: number
-	sk?: Uint8Array
-} = {}): { event: NostrEvent; sk: Uint8Array; pubkey: string } {
+export function createSignedEvent(
+	overrides: {
+		kind?: number
+		content?: string
+		tags?: string[][]
+		created_at?: number
+		sk?: Uint8Array
+	} = {},
+): { event: NostrEvent; sk: Uint8Array; pubkey: string } {
 	const sk = overrides.sk ?? generateSecretKey()
 	const pubkey = getPublicKey(sk)
 
@@ -34,12 +84,17 @@ export function tempStorage(): string {
 	return mkdtempSync(join(tmpdir(), 'nostr-swarm-test-'))
 }
 
-/** Create and start a NostrSwarm instance on a random port with isolated storage and topic */
+/**
+ * Create and start a NostrSwarm instance on a random port with isolated storage and topic.
+ * Always wired to the local testnet via the bootstrap-array form — never share a
+ * Testnet node via opts.dht (Hyperswarm.destroy() force-destroys injected DHTs).
+ */
 export async function createRelay(overrides?: {
 	relay?: Partial<RelayConfig>
 	wot?: Partial<WotConfig>
 	light?: Partial<LightClientConfig>
 }): Promise<NostrSwarm> {
+	const tn = await getTestnet()
 	const port = 10000 + Math.floor(Math.random() * 50000)
 	const relay = new NostrSwarm({
 		...overrides,
@@ -50,6 +105,7 @@ export async function createRelay(overrides?: {
 			topic: `test-${randomBytes(8).toString('hex')}`,
 			...overrides?.relay,
 		},
+		network: { dhtBootstrap: tn.bootstrap },
 	})
 	await relay.start()
 	return relay

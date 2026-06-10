@@ -1,7 +1,16 @@
 import { createHash } from 'node:crypto'
-import Hyperswarm from 'hyperswarm'
+import Hyperswarm, { type PeerInfo, type SwarmSocket } from 'hyperswarm'
 import type { EventStore } from '../storage/store.js'
 import { logger } from '../util/logger.js'
+
+export interface SwarmNetworkOptions {
+	/**
+	 * Override the DHT bootstrap node list (e.g. a local hyperdht testnet).
+	 * Constructor-only: never exposed via RelayConfig/CLI/env. When unset,
+	 * Hyperswarm uses the public DHT bootstrap servers.
+	 */
+	dhtBootstrap?: { host: string; port: number }[]
+}
 
 export class SwarmNetwork {
 	private readonly swarm: Hyperswarm
@@ -9,16 +18,18 @@ export class SwarmNetwork {
 	private readonly topicBuffer: Buffer
 	private peerCount = 0
 
-	constructor(store: EventStore, topic: string) {
-		this.swarm = new Hyperswarm()
+	constructor(store: EventStore, topic: string, opts?: SwarmNetworkOptions) {
+		// Bootstrap-array form only — never inject a shared DHT node via opts.dht,
+		// because Hyperswarm.destroy() force-destroys injected DHT instances.
+		this.swarm = opts?.dhtBootstrap
+			? new Hyperswarm({ bootstrap: opts.dhtBootstrap })
+			: new Hyperswarm()
 		this.store = store
-		this.topicBuffer = createHash('sha256')
-			.update(`nostr-swarm:${topic}`)
-			.digest()
+		this.topicBuffer = createHash('sha256').update(`nostr-swarm:${topic}`).digest()
 	}
 
 	async start(): Promise<void> {
-		this.swarm.on('connection', (socket: any, peerInfo: any) => {
+		this.swarm.on('connection', (socket: SwarmSocket, peerInfo: PeerInfo) => {
 			this.peerCount++
 			const remoteKey = peerInfo.publicKey?.toString('hex')?.slice(0, 16) ?? 'unknown'
 			logger.info('Peer connected', { peer: remoteKey, total: this.peerCount })

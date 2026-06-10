@@ -1,7 +1,7 @@
 import goodbye from 'graceful-goodbye'
 import { LightStore } from './light/store.js'
 import { EventStore } from './storage/store.js'
-import { SwarmNetwork } from './swarm/network.js'
+import { SwarmNetwork, type SwarmNetworkOptions } from './swarm/network.js'
 import { loadConfig, loadLightConfig, loadWotConfig } from './util/config.js'
 import { logger } from './util/logger.js'
 import type { LightClientConfig, RelayConfig, WotConfig } from './util/types.js'
@@ -25,6 +25,8 @@ export class NostrSwarm {
 		relay?: Partial<RelayConfig>
 		wot?: Partial<WotConfig>
 		light?: Partial<LightClientConfig>
+		/** Constructor-only (no RelayConfig/CLI/env surface): DHT options for tests/private DHTs */
+		network?: SwarmNetworkOptions
 	}) {
 		this.config = loadConfig(configOverrides?.relay)
 		this.wotConfig = loadWotConfig(configOverrides?.wot)
@@ -32,7 +34,7 @@ export class NostrSwarm {
 
 		this.store = new EventStore(this.config.storagePath)
 		this.server = new RelayServer(this.store, this.config)
-		this.network = new SwarmNetwork(this.store, this.config.topic)
+		this.network = new SwarmNetwork(this.store, this.config.topic, configOverrides?.network)
 
 		// Initialize WoT if owner pubkey is configured
 		if (this.wotConfig.ownerPubkey) {

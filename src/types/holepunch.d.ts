@@ -88,11 +88,22 @@ declare module 'hyperswarm' {
 	interface SwarmOptions {
 		keyPair?: any
 		seed?: Buffer
+		/** DHT bootstrap node list (e.g. a local hyperdht testnet); defaults to the public DHT */
+		bootstrap?: { host: string; port: number }[]
 	}
 
-	interface PeerInfo {
+	export interface PeerInfo {
 		publicKey: Buffer
 		topics: Buffer[]
+	}
+
+	/** Encrypted Noise connection socket handed to 'connection' listeners */
+	export interface SwarmSocket {
+		remotePublicKey: Buffer
+		on(event: 'close', listener: () => void): SwarmSocket
+		on(event: 'error', listener: (err: Error) => void): SwarmSocket
+		write(data: Buffer | string): boolean
+		destroy(err?: Error): void
 	}
 
 	class Hyperswarm extends EventEmitter {
@@ -106,6 +117,29 @@ declare module 'hyperswarm' {
 	}
 
 	export default Hyperswarm
+}
+
+// The '/testnet.js' subpath is mandatory: hyperdht has no exports map.
+declare module 'hyperdht/testnet.js' {
+	interface TestnetNode {
+		destroy(): Promise<void>
+	}
+
+	class Testnet {
+		nodes: TestnetNode[]
+		bootstrap: { host: string; port: number }[]
+		createNode(opts?: object): unknown
+		destroy(): Promise<void>
+	}
+
+	type Teardown = (fn: () => Promise<void>, opts?: { order?: number }) => void
+
+	function createTestnet(
+		size?: number,
+		opts?: { host?: string; port?: number; teardown?: Teardown } | Teardown,
+	): Promise<Testnet>
+
+	export default createTestnet
 }
 
 declare module 'graceful-goodbye' {
