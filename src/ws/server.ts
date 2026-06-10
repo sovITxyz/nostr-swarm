@@ -38,8 +38,10 @@ export class RelayServer {
 	}
 
 	async start(): Promise<void> {
-		return new Promise((resolve) => {
+		return new Promise((resolve, reject) => {
+			this.httpServer.once('error', reject)
 			this.httpServer.listen(this.config.port, this.config.host, () => {
+				this.httpServer.removeListener('error', reject)
 				logger.info('Relay server listening', {
 					port: this.config.port,
 					host: this.config.host,

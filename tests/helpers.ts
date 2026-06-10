@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools/pure'
 import { NostrSwarm } from '../src/relay.js'
-import type { NostrEvent } from '../src/util/types.js'
+import type { LightClientConfig, NostrEvent, RelayConfig, WotConfig } from '../src/util/types.js'
 import WebSocket from 'ws'
 
 /** Generate a valid signed Nostr event */
@@ -34,15 +34,22 @@ export function tempStorage(): string {
 	return mkdtempSync(join(tmpdir(), 'nostr-swarm-test-'))
 }
 
-/** Create and start a NostrSwarm instance on a random port */
-export async function createRelay(overrides?: Record<string, unknown>): Promise<NostrSwarm> {
+/** Create and start a NostrSwarm instance on a random port with isolated storage and topic */
+export async function createRelay(overrides?: {
+	relay?: Partial<RelayConfig>
+	wot?: Partial<WotConfig>
+	light?: Partial<LightClientConfig>
+}): Promise<NostrSwarm> {
 	const port = 10000 + Math.floor(Math.random() * 50000)
 	const relay = new NostrSwarm({
-		port,
-		host: '127.0.0.1',
-		storagePath: tempStorage(),
-		topic: `test-${randomBytes(8).toString('hex')}`,
 		...overrides,
+		relay: {
+			port,
+			host: '127.0.0.1',
+			storagePath: tempStorage(),
+			topic: `test-${randomBytes(8).toString('hex')}`,
+			...overrides?.relay,
+		},
 	})
 	await relay.start()
 	return relay
