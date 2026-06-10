@@ -25,9 +25,7 @@ export interface NostrFilter {
 export type EventKind = 'regular' | 'replaceable' | 'ephemeral' | 'addressable'
 
 /** Operations appended to Autobase */
-export type StoreOp =
-	| { type: 'put'; event: NostrEvent }
-	| { type: 'delete'; event: NostrEvent }
+export type StoreOp = { type: 'put'; event: NostrEvent } | { type: 'delete'; event: NostrEvent }
 
 /** Client-to-relay message types */
 export type ClientMessage =
@@ -53,6 +51,10 @@ export interface RelayConfig {
 	host: string
 	storagePath: string
 	topic: string
+	/** Autobase bootstrap: '' founds a new base; an 'nsw1…' invite or 64-hex base key joins one */
+	bootstrap: string
+	/** Writer keys (64-hex) to admit once this node's base is writable */
+	admitWriters: string[]
 	relayName: string
 	relayDescription: string
 	relayContact: string

@@ -48,7 +48,8 @@
     "hyperbee": "^2.27.3",
     "hyperswarm": "^4.17.0",
     "nostr-tools": "^2.23.3",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "z32": "^1.1.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
