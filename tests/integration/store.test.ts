@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { EventStore } from '../../src/storage/store.js'
 import { countFilters, queryFilter, queryFilters } from '../../src/storage/query.js'
+import { EventStore } from '../../src/storage/store.js'
+import { replaceableKey } from '../../src/util/keys.js'
+import type { NostrEvent } from '../../src/util/types.js'
 import { createSignedEvent, tempStorage } from '../helpers.js'
 
 describe('EventStore', () => {
@@ -156,8 +158,18 @@ describe('EventStore', () => {
 		it('kind 0: keeps only the newest per pubkey', async () => {
 			const now = Math.floor(Date.now() / 1000)
 			const { sk, pubkey } = createSignedEvent()
-			const { event: old } = createSignedEvent({ kind: 0, content: 'old profile', created_at: now - 10, sk })
-			const { event: newer } = createSignedEvent({ kind: 0, content: 'new profile', created_at: now, sk })
+			const { event: old } = createSignedEvent({
+				kind: 0,
+				content: 'old profile',
+				created_at: now - 10,
+				sk,
+			})
+			const { event: newer } = createSignedEvent({
+				kind: 0,
+				content: 'new profile',
+				created_at: now,
+				sk,
+			})
 			await put(old, newer)
 
 			const { events } = await queryFilter(store.indexes, { kinds: [0], authors: [pubkey] })
@@ -169,7 +181,12 @@ describe('EventStore', () => {
 			const now = Math.floor(Date.now() / 1000)
 			const { sk, pubkey } = createSignedEvent()
 			const { event: newer } = createSignedEvent({ kind: 0, content: 'new', created_at: now, sk })
-			const { event: old } = createSignedEvent({ kind: 0, content: 'old', created_at: now - 10, sk })
+			const { event: old } = createSignedEvent({
+				kind: 0,
+				content: 'old',
+				created_at: now - 10,
+				sk,
+			})
 			await put(newer)
 			await put(old) // should be rejected
 
@@ -181,8 +198,18 @@ describe('EventStore', () => {
 		it('kind 3: replaceable contact list', async () => {
 			const now = Math.floor(Date.now() / 1000)
 			const { sk, pubkey } = createSignedEvent()
-			const { event: old } = createSignedEvent({ kind: 3, content: 'old contacts', created_at: now - 10, sk })
-			const { event: newer } = createSignedEvent({ kind: 3, content: 'new contacts', created_at: now, sk })
+			const { event: old } = createSignedEvent({
+				kind: 3,
+				content: 'old contacts',
+				created_at: now - 10,
+				sk,
+			})
+			const { event: newer } = createSignedEvent({
+				kind: 3,
+				content: 'new contacts',
+				created_at: now,
+				sk,
+			})
 			await put(old, newer)
 
 			const { events } = await queryFilter(store.indexes, { kinds: [3], authors: [pubkey] })
@@ -193,8 +220,18 @@ describe('EventStore', () => {
 		it('kind 10002: replaceable relay list', async () => {
 			const now = Math.floor(Date.now() / 1000)
 			const { sk, pubkey } = createSignedEvent()
-			const { event: old } = createSignedEvent({ kind: 10002, content: 'old', created_at: now - 10, sk })
-			const { event: newer } = createSignedEvent({ kind: 10002, content: 'new', created_at: now, sk })
+			const { event: old } = createSignedEvent({
+				kind: 10002,
+				content: 'old',
+				created_at: now - 10,
+				sk,
+			})
+			const { event: newer } = createSignedEvent({
+				kind: 10002,
+				content: 'new',
+				created_at: now,
+				sk,
+			})
 			await put(old, newer)
 
 			const { events } = await queryFilter(store.indexes, { kinds: [10002], authors: [pubkey] })
@@ -382,11 +419,134 @@ describe('EventStore', () => {
 			await put(event)
 
 			// Both filters match the same event
-			const count = await countFilters(store.indexes, [
-				{ kinds: [1] },
-				{ ids: [event.id] },
-			])
+			const count = await countFilters(store.indexes, [{ kinds: [1] }, { ids: [event.id] }])
 			expect(count).toBe(1)
+		})
+	})
+
+	describe('consensus hardening (apply re-validation)', () => {
+		it('skips puts with a bad signature', async () => {
+			const { event } = createSignedEvent({ content: 'original' })
+			// Tamper with the content after signing — id/sig no longer verify
+			const forged: NostrEvent = { ...event, content: 'tampered' }
+			await put(forged)
+
+			const { events } = await queryFilter(store.indexes, { ids: [forged.id] })
+			expect(events).toHaveLength(0)
+		})
+
+		it('skips protected (NIP-70) events unconditionally', async () => {
+			const { event } = createSignedEvent({ tags: [['-']] })
+			await put(event)
+
+			const { events } = await queryFilter(store.indexes, { ids: [event.id] })
+			expect(events).toHaveLength(0)
+		})
+
+		it('forged tombstone does not censor a later legitimate put', async () => {
+			const { event } = createSignedEvent({ content: 'legit' })
+
+			// Attacker (different key) "deletes" the event before it is stored
+			const { event: forgedDelete } = createSignedEvent({
+				kind: 5,
+				tags: [['e', event.id]],
+			})
+			await del(forgedDelete)
+
+			// The real author's put must still land
+			await put(event)
+
+			const { events } = await queryFilter(store.indexes, { ids: [event.id] })
+			expect(events).toHaveLength(1)
+			expect(events[0]?.content).toBe('legit')
+		})
+
+		it("author's own tombstone blocks a put that arrives after the delete", async () => {
+			const { event, sk } = createSignedEvent({ content: 'gone' })
+			const { event: delEvent } = createSignedEvent({
+				kind: 5,
+				tags: [['e', event.id]],
+				sk,
+			})
+			await del(delEvent)
+			await put(event) // delete-before-put ordering
+
+			const { events } = await queryFilter(store.indexes, { ids: [event.id] })
+			expect(events).toHaveLength(0)
+		})
+
+		it('drops unsigned forged deletions entirely (no tombstone, no removal)', async () => {
+			const { event } = createSignedEvent({ content: 'target' })
+			await put(event)
+
+			// Like the old light-client prune ops: unsigned synthetic kind 5
+			await del({
+				id: 'f'.repeat(64),
+				pubkey: event.pubkey,
+				created_at: Math.floor(Date.now() / 1000),
+				kind: 5,
+				tags: [['e', event.id]],
+				content: 'pruned by WoT policy',
+				sig: '',
+			})
+
+			// Still stored, and re-puttable (no tombstone was written)
+			const { events } = await queryFilter(store.indexes, { ids: [event.id] })
+			expect(events).toHaveLength(1)
+		})
+
+		it('preserves the replaceable pointer when deleting a superseded event', async () => {
+			const now = Math.floor(Date.now() / 1000)
+			const { sk, pubkey } = createSignedEvent()
+			const { event: old } = createSignedEvent({
+				kind: 0,
+				content: 'old profile',
+				created_at: now - 10,
+				sk,
+			})
+			const { event: newer } = createSignedEvent({
+				kind: 0,
+				content: 'new profile',
+				created_at: now,
+				sk,
+			})
+			await put(old, newer)
+
+			// Author deletes the superseded old version; the pointer references `newer`
+			const { event: delEvent } = createSignedEvent({
+				kind: 5,
+				tags: [['e', old.id]],
+				sk,
+			})
+			await del(delEvent)
+
+			const pointer = await store.indexes.replaceable.get(replaceableKey(pubkey, 0))
+			expect(pointer?.value).toBe(newer.id)
+
+			// An even older profile must still be rejected as a replacement
+			const { event: oldest } = createSignedEvent({
+				kind: 0,
+				content: 'oldest profile',
+				created_at: now - 20,
+				sk,
+			})
+			await put(oldest)
+
+			const { events } = await queryFilter(store.indexes, { kinds: [0], authors: [pubkey] })
+			expect(events).toHaveLength(1)
+			expect(events[0]?.content).toBe('new profile')
+		})
+
+		it('halts (host.interrupt) on ops with a newer consensus version', async () => {
+			const { event } = createSignedEvent()
+			const interrupted = new Promise((resolve) => {
+				store.base.once('interrupt', resolve)
+			})
+
+			// Append throws 'Autobase is closing' once the interrupt lands
+			await store.base.append({ type: 'put', event, v: 2 }).catch(() => {})
+
+			await expect(interrupted).resolves.toBe('unsupported op version')
 		})
 	})
 
@@ -406,10 +566,7 @@ describe('EventStore', () => {
 			const { event } = createSignedEvent({ kind: 1 })
 			await put(event)
 
-			const events = await queryFilters(store.indexes, [
-				{ kinds: [1] },
-				{ ids: [event.id] },
-			])
+			const events = await queryFilters(store.indexes, [{ kinds: [1] }, { ids: [event.id] }])
 			expect(events).toHaveLength(1)
 		})
 	})

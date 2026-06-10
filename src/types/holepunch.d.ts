@@ -1,4 +1,5 @@
 declare module 'autobase' {
+	// biome-ignore lint/correctness/noUnusedImports: used by `class Autobase extends EventEmitter`
 	import type { EventEmitter } from 'node:events'
 
 	interface AutobaseOptions {
@@ -6,6 +7,8 @@ declare module 'autobase' {
 		apply: (nodes: any[], view: any, host: any) => Promise<void>
 		valueEncoding?: string
 		ackInterval?: number
+		/** Enable the optimistic-apply path for non-writer appends (constructor-gated consensus option) */
+		optimistic?: boolean
 		encryptionKey?: Buffer | Promise<Buffer>
 		encrypt?: boolean
 		fastForward?: boolean
@@ -83,6 +86,7 @@ declare module 'corestore' {
 }
 
 declare module 'hyperswarm' {
+	// biome-ignore lint/correctness/noUnusedImports: used by `class Hyperswarm extends EventEmitter`
 	import type { EventEmitter } from 'node:events'
 
 	interface SwarmOptions {
@@ -108,7 +112,10 @@ declare module 'hyperswarm' {
 
 	class Hyperswarm extends EventEmitter {
 		constructor(opts?: SwarmOptions)
-		join(topic: Buffer, opts?: { server?: boolean; client?: boolean }): {
+		join(
+			topic: Buffer,
+			opts?: { server?: boolean; client?: boolean },
+		): {
 			flushed(): Promise<void>
 		}
 		leave(topic: Buffer): Promise<void>

@@ -1,13 +1,13 @@
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { WebSocketServer, type WebSocket } from 'ws'
+import { readFileSync } from 'node:fs'
+import { type IncomingMessage, type ServerResponse, createServer } from 'node:http'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { type WebSocket, WebSocketServer } from 'ws'
 import type { EventStore } from '../storage/store.js'
 import { logger } from '../util/logger.js'
 import type { RelayConfig, RelayInfo } from '../util/types.js'
 import { Connection } from './connection.js'
 import { MessageHandler } from './handler.js'
-import { readFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 
 function getVersion(): string {
 	try {
@@ -89,7 +89,8 @@ export class RelayServer {
 				description: this.config.relayDescription,
 				pubkey: this.config.relayPubkey,
 				contact: this.config.relayContact,
-				supported_nips: [1, 9, 11, 40, 42, 45, 70],
+				// NIP-70 is intentionally absent: protected events are rejected (see ws/handler.ts)
+				supported_nips: [1, 9, 11, 40, 42, 45],
 				software: 'nostr-swarm',
 				version: getVersion(),
 				limitation: {

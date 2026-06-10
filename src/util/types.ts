@@ -24,8 +24,14 @@ export interface NostrFilter {
 /** Classification of event kinds */
 export type EventKind = 'regular' | 'replaceable' | 'ephemeral' | 'addressable'
 
-/** Operations appended to Autobase */
-export type StoreOp = { type: 'put'; event: NostrEvent } | { type: 'delete'; event: NostrEvent }
+/**
+ * Operations appended to Autobase.
+ * `v` is a reserved consensus-version field; absent means 1. apply() halts
+ * (host.interrupt) on ops with v > CONSENSUS_VERSION rather than diverge.
+ */
+export type StoreOp =
+	| { type: 'put'; event: NostrEvent; v?: number }
+	| { type: 'delete'; event: NostrEvent; v?: number }
 
 /** Client-to-relay message types */
 export type ClientMessage =

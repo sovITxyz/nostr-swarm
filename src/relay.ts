@@ -62,8 +62,8 @@ export class NostrSwarm {
 
 		// Build WoT graph if configured (and not in light mode, which does its own)
 		if (this.wot && !this.lightStore) {
-			await this.wot.rebuild(this.store.indexes)
-			this.wot.startRefresh(this.store.indexes)
+			await this.wot.rebuild(() => this.store.indexes)
+			this.wot.startRefresh(() => this.store.indexes)
 		}
 
 		await this.server.start()

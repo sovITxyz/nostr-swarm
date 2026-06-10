@@ -7,7 +7,8 @@ export function buildRelayInfo(config: RelayConfig, version: string): RelayInfo 
 		description: config.relayDescription,
 		pubkey: config.relayPubkey,
 		contact: config.relayContact,
-		supported_nips: [1, 9, 11, 40, 42, 45, 70],
+		// NIP-70 is intentionally absent: protected events are rejected (see ws/handler.ts)
+		supported_nips: [1, 9, 11, 40, 42, 45],
 		software: 'nostr-swarm',
 		version,
 		limitation: {
