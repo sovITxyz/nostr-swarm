@@ -34,8 +34,10 @@ export class SwarmNetwork {
 			const remoteKey = peerInfo.publicKey?.toString('hex')?.slice(0, 16) ?? 'unknown'
 			logger.info('Peer connected', { peer: remoteKey, total: this.peerCount })
 
-			// Replicate all corestores over this encrypted connection
-			this.store.corestore.replicate(socket)
+			// Replicate through the Autobase (not the raw corestore) so the
+			// protomux-wakeup protocol announces writer heads to this peer.
+			// relay.ts ordering guarantees the base is ready before connections.
+			this.store.base.replicate(socket)
 
 			socket.on('close', () => {
 				this.peerCount--

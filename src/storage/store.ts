@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import Autobase from 'autobase'
+import Autobase, { type AutobaseApplyHost, type AutobaseApplyNode } from 'autobase'
 import Corestore from 'corestore'
 import Hyperbee from 'hyperbee'
 import {
@@ -12,6 +12,7 @@ import {
 	validateEventStructure,
 	verifyEventSignature,
 } from '../nostr/events.js'
+import { encodeInvite } from '../util/invite.js'
 import {
 	addressableKey,
 	authorKey,
@@ -34,8 +35,17 @@ import { type IndexSubs, createSubs } from './indexes.js'
  */
 export const CONSENSUS_VERSION = 1
 
+/**
+ * Hard cap on admitted writers, enforced deterministically in apply()
+ * (the writers-sub count is part of the view). Bounds add_writer spam.
+ */
+export const MAX_WRITERS = 64
+
 /** Bound on the 'event:stored' emission-dedup LRU */
 const STORED_EMIT_LRU_MAX = 4096
+
+/** Writer keys are the joiner's base.local.key as 64 lowercase hex */
+const WRITER_KEY_RE = /^[0-9a-f]{64}$/
 
 /**
  * Tombstone recorded in the deletion sub.
@@ -62,6 +72,7 @@ export class EventStore extends EventEmitter {
 		super()
 		this.corestore = new Corestore(storagePath)
 		this.base = new Autobase(this.corestore, bootstrap ?? null, {
+			// biome-ignore lint/suspicious/noExplicitAny: untyped holepunch view store
 			open: (store: any) => {
 				return new Hyperbee(store.get('view'), {
 					keyEncoding: 'utf-8',
@@ -76,6 +87,12 @@ export class EventStore extends EventEmitter {
 			// are always rolled back — kept for v2 self-verifying writes.
 			optimistic: true,
 		})
+
+		// Re-emit base lifecycle events: 'writable' fires when this node's
+		// add_writer op has been applied (a joiner needs no restart), 'update'
+		// after every drain (used by pollers/tests instead of busy-waiting).
+		this.base.on('writable', () => this.emit('writable'))
+		this.base.on('update', () => this.emit('update'))
 	}
 
 	get view(): Hyperbee {
@@ -93,9 +110,37 @@ export class EventStore extends EventEmitter {
 		return this.subs
 	}
 
+	/** Whether this node can append ops (founder, or admitted via add_writer) */
+	get writable(): boolean {
+		return this.base.writable
+	}
+
+	/** This node's writer key (base.local.key) — what an operator sends out-of-band to be admitted */
+	get localWriterKey(): Buffer {
+		return this.base.local.key
+	}
+
+	/** True when this node founded the base (base.key === base.local.key) */
+	get isFounder(): boolean {
+		const key = this.base.key
+		if (key === null) return false
+		return key.equals(this.base.local.key)
+	}
+
 	async ready(): Promise<void> {
 		await this.base.ready()
-		logger.info('Event store ready', { key: this.base.key?.toString('hex')?.slice(0, 16) })
+		const baseKey = this.base.key
+		if (baseKey) {
+			// Logged prominently: the invite is what operators paste into
+			// --bootstrap; the writer key is what gets sent for admission.
+			logger.info('Event store ready', {
+				invite: encodeInvite(baseKey),
+				baseKey: baseKey.toString('hex'),
+				writerKey: this.localWriterKey.toString('hex'),
+				founder: this.isFounder,
+				writable: this.writable,
+			})
+		}
 	}
 
 	async close(): Promise<void> {
@@ -119,13 +164,56 @@ export class EventStore extends EventEmitter {
 	}
 
 	/**
+	 * Append an add_writer op for an operator-approved joiner.
+	 * This is a pre-check for fast feedback — apply() is authoritative
+	 * (it re-checks dedup and the cap deterministically against the view).
+	 * Throws when this node is not writable (only writers can admit).
+	 */
+	async admitWriter(keyHex: string): Promise<'appended' | 'already-admitted' | 'cap-reached'> {
+		if (!this.writable) {
+			throw new Error('not writable: only an admitted writer (or the founder) can admit writers')
+		}
+		const key = keyHex.toLowerCase()
+		if (!WRITER_KEY_RE.test(key)) {
+			throw new Error(`invalid writer key: expected 64 hex chars, got '${keyHex}'`)
+		}
+		// The founder's writer key is the base key itself — implicitly admitted
+		if (this.base.key && key === this.base.key.toString('hex')) return 'already-admitted'
+		const subs = this.indexes
+		if (await subs.writers.get(key)) return 'already-admitted'
+		if ((await this.countWriters(subs)) >= MAX_WRITERS) return 'cap-reached'
+		await this.base.append({ type: 'add_writer', key } satisfies StoreOp)
+		return 'appended'
+	}
+
+	/** All admitted writer keys (64-hex), excluding the implicit founder */
+	async listWriters(): Promise<string[]> {
+		const keys: string[] = []
+		for await (const entry of this.indexes.writers.createReadStream()) {
+			keys.push(entry.key)
+		}
+		return keys
+	}
+
+	/** Count entries in the writers sub (cap enforcement; bounded by MAX_WRITERS) */
+	private async countWriters(subs: IndexSubs): Promise<number> {
+		let count = 0
+		for await (const _ of subs.writers.createReadStream()) count++
+		return count
+	}
+
+	/**
 	 * The deterministic apply function for Autobase linearization.
 	 *
 	 * This is a versioned consensus protocol (CONSENSUS_VERSION): every rule
 	 * must be deterministic and config-free, because all peers of one base
 	 * re-run it over the same ops and must materialize identical views.
 	 */
-	private async apply(nodes: any[], view: Hyperbee, host: any): Promise<void> {
+	private async apply(
+		nodes: AutobaseApplyNode[],
+		view: Hyperbee,
+		host: AutobaseApplyHost,
+	): Promise<void> {
 		// Create sub-databases from the view directly.
 		// Autobase already handles atomicity for the apply function.
 		const subs = createSubs(view)
@@ -146,11 +234,35 @@ export class EventStore extends EventEmitter {
 					await this.applyPut(subs, op.event)
 				} else if (op.type === 'delete') {
 					await this.applyDelete(subs, op.event)
+				} else if (op.type === 'add_writer') {
+					await this.applyAddWriter(subs, op.key, node, host)
 				}
 			} catch (err) {
 				logger.error('Error in apply', { error: String(err), type: op.type })
 			}
 		}
+	}
+
+	/**
+	 * Consensus rule 3 (§3.3): admit a writer. All checks read only the view
+	 * (deterministic, config-free). Admissions always use { indexer: false }:
+	 * the founder stays the sole indexer, so checkpoint liveness never depends
+	 * on churny peers.
+	 */
+	private async applyAddWriter(
+		subs: IndexSubs,
+		key: string,
+		node: AutobaseApplyNode,
+		host: AutobaseApplyHost,
+	): Promise<void> {
+		if (typeof key !== 'string' || !WRITER_KEY_RE.test(key)) return
+		// The founder's writer key is the base key itself — implicit, never in
+		// the sub, and must never be re-added (could demote its indexer status).
+		if (key === host.key.toString('hex')) return
+		if (await subs.writers.get(key)) return // duplicate add_writer is a no-op
+		if ((await this.countWriters(subs)) >= MAX_WRITERS) return
+		await host.addWriter(Buffer.from(key, 'hex'), { indexer: false })
+		await subs.writers.put(key, { addedBy: node.from.key.toString('hex') })
 	}
 
 	private async applyPut(subs: IndexSubs, event: NostrEvent): Promise<void> {

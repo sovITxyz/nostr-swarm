@@ -94,6 +94,7 @@ export class MessageHandler {
 
 		// Structural validation
 		if (!validateEventStructure(event)) {
+			// biome-ignore lint/suspicious/noExplicitAny: best-effort id from an invalid payload
 			conn.sendOk((event as any)?.id ?? '', false, 'invalid: bad event structure')
 			return
 		}
@@ -129,6 +130,13 @@ export class MessageHandler {
 			// Don't store, just broadcast to matching subscriptions
 			this.broadcastToSubscriptions(event)
 			conn.sendOk(event.id, true, '')
+			return
+		}
+
+		// Read-only gate: a joiner serves full reads from the replicated view,
+		// but cannot append ops until an existing writer's operator admits it.
+		if (!this.store.writable) {
+			conn.sendOk(event.id, false, 'blocked: read-only replica awaiting writer admission')
 			return
 		}
 
@@ -244,6 +252,7 @@ export class MessageHandler {
 
 		const event = msg[1] as unknown
 		if (!validateEventStructure(event)) {
+			// biome-ignore lint/suspicious/noExplicitAny: best-effort id from an invalid payload
 			conn.sendOk((event as any)?.id ?? '', false, 'invalid: bad event structure')
 			return
 		}

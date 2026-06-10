@@ -2,9 +2,30 @@ declare module 'autobase' {
 	// biome-ignore lint/correctness/noUnusedImports: used by `class Autobase extends EventEmitter`
 	import type { EventEmitter } from 'node:events'
 
+	/** A linearized input node handed to apply() (autobase/lib/apply-state.js applyBatch entries) */
+	export interface AutobaseApplyNode {
+		/** The appended op payload; null for ack nodes */
+		value: any
+		/** The writer hypercore that authored this node */
+		from: { key: Buffer }
+		length: number
+		heads: { key: Buffer; length: number }[]
+	}
+
+	/** Host calls available to apply() (autobase/lib/apply-calls.js PrivateApplyCalls) */
+	export interface AutobaseApplyHost {
+		/** The base key (= the founder's local writer key) */
+		key: Buffer
+		discoveryKey: Buffer
+		addWriter(key: Buffer, opts?: { indexer?: boolean }): Promise<void>
+		ackWriter(key: Buffer): Promise<void>
+		removeWriter(key: Buffer): Promise<void>
+		interrupt(reason?: string): void
+	}
+
 	interface AutobaseOptions {
 		open: (store: any) => any
-		apply: (nodes: any[], view: any, host: any) => Promise<void>
+		apply: (nodes: AutobaseApplyNode[], view: any, host: AutobaseApplyHost) => Promise<void>
 		valueEncoding?: string
 		ackInterval?: number
 		/** Enable the optimistic-apply path for non-writer appends (constructor-gated consensus option) */
@@ -21,7 +42,8 @@ declare module 'autobase' {
 		discoveryKey: Buffer | null
 		view: any
 		core: any
-		local: { key: Buffer }
+		/** The local input core (its key is this node's writer key); null before ready() */
+		local: { key: Buffer; length: number }
 		length: number
 		writable: boolean
 		isIndexer: boolean
@@ -30,6 +52,14 @@ declare module 'autobase' {
 		append(value: any, opts?: any): Promise<void>
 		update(): Promise<void>
 		ack(bg?: boolean): Promise<void>
+		/** Replicate the underlying corestore + protomux wakeup over a stream/socket */
+		replicate(stream: any, opts?: any): any
+		waitForWritable(): Promise<boolean>
+		/** 'writable'/'unwritable' fire on writability transitions; 'update' after each drain */
+		on(event: 'writable' | 'unwritable' | 'update' | 'is-indexer', listener: () => void): this
+		on(event: string | symbol, listener: (...args: any[]) => void): this
+		once(event: 'writable' | 'unwritable' | 'update' | 'is-indexer', listener: () => void): this
+		once(event: string | symbol, listener: (...args: any[]) => void): this
 	}
 
 	export default Autobase
@@ -156,6 +186,7 @@ declare module 'graceful-goodbye' {
 
 declare module 'b4a' {
 	export function from(input: string | Buffer, encoding?: string): Buffer
+	// biome-ignore lint/suspicious/noShadowRestrictedNames: b4a really exports `toString`
 	export function toString(buf: Buffer, encoding?: string): string
 	export function alloc(size: number, fill?: number): Buffer
 	export function isBuffer(obj: any): obj is Buffer

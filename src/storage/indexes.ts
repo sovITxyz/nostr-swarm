@@ -12,6 +12,7 @@ export const SUB_NAMES = {
 	addressable: 'addressable',
 	expiration: 'expiration',
 	deletion: 'deletion',
+	writers: 'writers',
 } as const
 
 export interface IndexSubs {
@@ -25,6 +26,11 @@ export interface IndexSubs {
 	addressable: Hyperbee
 	expiration: Hyperbee
 	deletion: Hyperbee
+	/**
+	 * Admitted writers: key = writerKeyHex (64 lowercase hex), value = { addedBy }.
+	 * The founder's own writer key is implicit and never recorded here.
+	 */
+	writers: Hyperbee
 }
 
 /** Create all sub-databases from a root Hyperbee */
@@ -41,5 +47,6 @@ export function createSubs(db: Hyperbee): IndexSubs {
 		addressable: db.sub(SUB_NAMES.addressable, opts),
 		expiration: db.sub(SUB_NAMES.expiration, opts),
 		deletion: db.sub(SUB_NAMES.deletion, opts),
+		writers: db.sub(SUB_NAMES.writers, opts),
 	}
 }

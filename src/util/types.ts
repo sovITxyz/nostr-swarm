@@ -32,6 +32,8 @@ export type EventKind = 'regular' | 'replaceable' | 'ephemeral' | 'addressable'
 export type StoreOp =
 	| { type: 'put'; event: NostrEvent; v?: number }
 	| { type: 'delete'; event: NostrEvent; v?: number }
+	/** Admit a writer: key = the joiner's base.local.key as 64 lowercase hex */
+	| { type: 'add_writer'; key: string; v?: number }
 
 /** Client-to-relay message types */
 export type ClientMessage =
