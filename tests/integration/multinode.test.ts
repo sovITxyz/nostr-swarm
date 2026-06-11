@@ -105,6 +105,57 @@ describe('multi-node convergence (local testnet)', { timeout: 60_000 }, () => {
 		])
 	})
 
+	it('a read-only peer cannot self-admit via an optimistic append', async () => {
+		// The base is constructed with optimistic:true (reserved for a v2
+		// self-verifying-write path). That lets any peer holding only the read
+		// invite bypass the "not writable" guard and append a speculative block.
+		// An add_writer op for the appender's own key is the dangerous case:
+		// host.addWriter grows that writer's system length, which autobase reads
+		// as the optimistic block being "acked" — durably admitting an unvetted
+		// writer unless apply() skips optimistic nodes. This proves it does.
+		expect(joiner.store.writable).toBe(false)
+		const attackerKey = joiner.store.localWriterKey.toString('hex')
+		const beforeLocalLen = joiner.store.base.local.length
+
+		// Append directly through the base, bypassing the WS read-only gate.
+		await joiner.store.base.append({ type: 'add_writer', key: attackerKey }, { optimistic: true })
+		// The malicious block really was created and shipped (not rejected locally).
+		expect(joiner.store.base.local.length).toBe(beforeLocalLen + 1)
+
+		// Give the founder ample time to pull and run the block through apply.
+		await new Promise((r) => setTimeout(r, 6000))
+
+		// Defeated: the founder never admitted the attacker, the joiner stays
+		// read-only, and the founder (sole indexer) was not halted.
+		expect(await founder.store.listWriters()).toEqual([])
+		expect(joiner.store.writable).toBe(false)
+		expect(founder.store.writable).toBe(true)
+	})
+
+	it('a read-only peer cannot halt the founder with an optimistic future-version op', async () => {
+		// Same vector, DoS variant: a `v` above CONSENSUS_VERSION would trip
+		// host.interrupt (a permanent, swarm-wide linearization halt) if apply
+		// acted on optimistic input. Skipping optimistic nodes closes it.
+		expect(joiner.store.writable).toBe(false)
+		const { event } = createSignedEvent({ content: 'future version', sk: authorSk })
+		await joiner.store.base.append(
+			{ type: 'put', event, v: 2 } as unknown as Record<string, unknown>,
+			{ optimistic: true },
+		)
+		await new Promise((r) => setTimeout(r, 4000))
+
+		// The founder is still live: writable, not interrupted, and still applies
+		// a normal event end-to-end after the attack.
+		expect(founder.store.writable).toBe(true)
+		const { event: probe } = createSignedEvent({ content: 'still alive', sk: authorSk })
+		const ok = await publish(wsFounder, probe)
+		expect(ok[2]).toBe(true)
+		await waitFor(async () => (await queryIds(wsFounder, [probe.id])).length === 1, {
+			timeout: 45_000,
+			interval: 500,
+		})
+	})
+
 	it('admitWriter makes the joiner writable without restart and writes flow back', async () => {
 		const writerKey = joiner.store.localWriterKey.toString('hex')
 		expect(await founder.store.admitWriter(writerKey)).toBe('appended')

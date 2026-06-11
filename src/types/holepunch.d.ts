@@ -10,6 +10,12 @@ declare module 'autobase' {
 		from: { key: Buffer }
 		length: number
 		heads: { key: Buffer; length: number }[]
+		/**
+		 * True for blocks applied via the optimistic path (a non-writer's
+		 * speculative append). v1 never accepts these — apply() skips them so
+		 * autobase rolls the block back. See store.ts apply().
+		 */
+		optimistic?: boolean
 	}
 
 	/** Host calls available to apply() (autobase/lib/apply-calls.js PrivateApplyCalls) */

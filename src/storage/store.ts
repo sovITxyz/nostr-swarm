@@ -221,6 +221,18 @@ export class EventStore extends EventEmitter {
 		for (const node of nodes) {
 			if (node.value === null) continue // skip ack nodes
 
+			// Skip optimistic blocks: v1 never accepts speculative appends from
+			// non-writers. The `optimistic: true` constructor option is reserved
+			// for a v2 self-verifying-write path, but enabling it lets any peer
+			// holding only the read invite append blocks. Acting on such a block
+			// here is unsafe: an `add_writer` for the appender's own key would
+			// make autobase treat the optimistic block as acked (it grows that
+			// writer's system length) and durably admit an unvetted writer, and a
+			// `v > CONSENSUS_VERSION` op would trip host.interrupt — a permanent,
+			// swarm-wide halt — on untrusted input. Skipping leaves the writer's
+			// system length unchanged so autobase rolls the block back.
+			if (node.optimistic) continue
+
 			const op = node.value as StoreOp
 
 			// Ops from a newer consensus version halt the node rather than diverge.
