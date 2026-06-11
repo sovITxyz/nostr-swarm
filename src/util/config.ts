@@ -5,6 +5,8 @@ const defaults: RelayConfig = {
 	host: '0.0.0.0',
 	storagePath: './nostr-swarm-data',
 	topic: 'nostr',
+	bootstrap: '',
+	admitWriters: [],
 	relayName: 'nostr-swarm',
 	relayDescription: 'A peer-to-peer Nostr relay over Hyperswarm',
 	relayContact: '',
@@ -51,12 +53,23 @@ function envBool(name: string, fallback: boolean): boolean {
 	return val === '1' || val.toLowerCase() === 'true'
 }
 
+function envList(name: string, fallback: string[]): string[] {
+	const val = process.env[name]
+	if (val === undefined) return fallback
+	return val
+		.split(',')
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0)
+}
+
 export function loadConfig(overrides?: Partial<RelayConfig>): RelayConfig {
 	return {
 		port: envInt('WS_PORT', overrides?.port ?? defaults.port),
 		host: envStr('WS_HOST', overrides?.host ?? defaults.host),
 		storagePath: envStr('STORAGE_PATH', overrides?.storagePath ?? defaults.storagePath),
 		topic: envStr('SWARM_TOPIC', overrides?.topic ?? defaults.topic),
+		bootstrap: envStr('BOOTSTRAP_KEY', overrides?.bootstrap ?? defaults.bootstrap),
+		admitWriters: envList('ADMIT_WRITERS', overrides?.admitWriters ?? defaults.admitWriters),
 		relayName: envStr('RELAY_NAME', overrides?.relayName ?? defaults.relayName),
 		relayDescription: envStr(
 			'RELAY_DESCRIPTION',
@@ -99,10 +112,7 @@ export function loadWotConfig(overrides?: Partial<WotConfig>): WotConfig {
 			'WOT_DISCOVERY',
 			overrides?.discoveryEnabled ?? wotDefaults.discoveryEnabled,
 		),
-		discoveryTtl: envInt(
-			'WOT_DISCOVERY_TTL',
-			overrides?.discoveryTtl ?? wotDefaults.discoveryTtl,
-		),
+		discoveryTtl: envInt('WOT_DISCOVERY_TTL', overrides?.discoveryTtl ?? wotDefaults.discoveryTtl),
 		discoveryMaxEventsPerPubkey: envInt(
 			'WOT_DISCOVERY_MAX_EVENTS',
 			overrides?.discoveryMaxEventsPerPubkey ?? wotDefaults.discoveryMaxEventsPerPubkey,

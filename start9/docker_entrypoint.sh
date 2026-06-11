@@ -33,6 +33,12 @@ if [ -f "$CONFIG_FILE" ]; then
     val=$(get_yaml_value "swarm-topic")
     [ -n "$val" ] && export SWARM_TOPIC="$val"
 
+    val=$(get_yaml_value "bootstrap-key")
+    [ -n "$val" ] && export BOOTSTRAP_KEY="$val"
+
+    val=$(get_yaml_value "admit-writers")
+    [ -n "$val" ] && export ADMIT_WRITERS="$val"
+
     val=$(get_yaml_value "wot-owner-pubkey")
     [ -n "$val" ] && export WOT_OWNER_PUBKEY="$val"
 
@@ -56,6 +62,8 @@ echo "Starting nostr-swarm..."
 echo "  Storage: $STORAGE_PATH"
 echo "  Port: $WS_PORT"
 echo "  Topic: ${SWARM_TOPIC:-nostr}"
+echo "  Bootstrap: ${BOOTSTRAP_KEY:-none (founding/reopening own base)}"
+echo "  Admit: ${ADMIT_WRITERS:-none}"
 echo "  WoT: ${WOT_OWNER_PUBKEY:+enabled (${WOT_OWNER_PUBKEY:0:16}...)}${WOT_OWNER_PUBKEY:-disabled}"
 
 exec node /app/dist/cli.js

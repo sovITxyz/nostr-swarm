@@ -1,4 +1,10 @@
-import { classifyKind, isExpired, isProtected, validateEventStructure, verifyEventSignature } from '../nostr/events.js'
+import {
+	classifyKind,
+	isExpired,
+	isProtected,
+	validateEventStructure,
+	verifyEventSignature,
+} from '../nostr/events.js'
 import { matchFilters, validateFilter } from '../nostr/filters.js'
 import { countFilters, queryFilters } from '../storage/query.js'
 import type { EventStore } from '../storage/store.js'
@@ -88,6 +94,7 @@ export class MessageHandler {
 
 		// Structural validation
 		if (!validateEventStructure(event)) {
+			// biome-ignore lint/suspicious/noExplicitAny: best-effort id from an invalid payload
 			conn.sendOk((event as any)?.id ?? '', false, 'invalid: bad event structure')
 			return
 		}
@@ -104,9 +111,15 @@ export class MessageHandler {
 			return
 		}
 
-		// NIP-70: protected events require auth
-		if (isProtected(event) && conn.authPubkey !== event.pubkey) {
-			conn.sendOk(event.id, false, 'auth-required: protected event')
+		// NIP-70: a replicated multi-writer store cannot honor "don't propagate".
+		// Reject unconditionally (NIP-70 explicitly blesses rejection); apply()
+		// skips protected events too — never accept-then-drop.
+		if (isProtected(event)) {
+			conn.sendOk(
+				event.id,
+				false,
+				'blocked: protected events (NIP-70) are not accepted by replicated relays',
+			)
 			return
 		}
 
@@ -117,6 +130,13 @@ export class MessageHandler {
 			// Don't store, just broadcast to matching subscriptions
 			this.broadcastToSubscriptions(event)
 			conn.sendOk(event.id, true, '')
+			return
+		}
+
+		// Read-only gate: a joiner serves full reads from the replicated view,
+		// but cannot append ops until an existing writer's operator admits it.
+		if (!this.store.writable) {
+			conn.sendOk(event.id, false, 'blocked: read-only replica awaiting writer admission')
 			return
 		}
 
@@ -152,10 +172,7 @@ export class MessageHandler {
 		}
 
 		// Check subscription limit
-		if (
-			!conn.subscriptions.has(subId) &&
-			conn.subscriptions.size >= conn.maxSubscriptions
-		) {
+		if (!conn.subscriptions.has(subId) && conn.subscriptions.size >= conn.maxSubscriptions) {
 			conn.sendClosed(subId, 'error: too many subscriptions')
 			return
 		}
@@ -235,6 +252,7 @@ export class MessageHandler {
 
 		const event = msg[1] as unknown
 		if (!validateEventStructure(event)) {
+			// biome-ignore lint/suspicious/noExplicitAny: best-effort id from an invalid payload
 			conn.sendOk((event as any)?.id ?? '', false, 'invalid: bad event structure')
 			return
 		}

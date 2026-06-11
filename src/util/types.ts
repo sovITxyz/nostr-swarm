@@ -24,10 +24,16 @@ export interface NostrFilter {
 /** Classification of event kinds */
 export type EventKind = 'regular' | 'replaceable' | 'ephemeral' | 'addressable'
 
-/** Operations appended to Autobase */
+/**
+ * Operations appended to Autobase.
+ * `v` is a reserved consensus-version field; absent means 1. apply() halts
+ * (host.interrupt) on ops with v > CONSENSUS_VERSION rather than diverge.
+ */
 export type StoreOp =
-	| { type: 'put'; event: NostrEvent }
-	| { type: 'delete'; event: NostrEvent }
+	| { type: 'put'; event: NostrEvent; v?: number }
+	| { type: 'delete'; event: NostrEvent; v?: number }
+	/** Admit a writer: key = the joiner's base.local.key as 64 lowercase hex */
+	| { type: 'add_writer'; key: string; v?: number }
 
 /** Client-to-relay message types */
 export type ClientMessage =
@@ -53,6 +59,10 @@ export interface RelayConfig {
 	host: string
 	storagePath: string
 	topic: string
+	/** Autobase bootstrap: '' founds a new base; an 'nsw1…' invite or 64-hex base key joins one */
+	bootstrap: string
+	/** Writer keys (64-hex) to admit once this node's base is writable */
+	admitWriters: string[]
 	relayName: string
 	relayDescription: string
 	relayContact: string

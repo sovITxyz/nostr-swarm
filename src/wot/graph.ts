@@ -28,8 +28,15 @@ export class WotGraph extends EventEmitter {
 		this.config = config
 	}
 
-	/** Build the graph from the current index state */
-	async rebuild(indexes: IndexSubs): Promise<void> {
+	/**
+	 * Build the graph from the current index state.
+	 *
+	 * Takes a thunk rather than the subs themselves: fast-forward can swap the
+	 * Autobase view identity, and a held IndexSubs would go stale. The thunk
+	 * resolves the live subs on every (re)build.
+	 */
+	async rebuild(getIndexes: () => IndexSubs): Promise<void> {
+		const indexes = getIndexes()
 		const startTime = Date.now()
 		this.follows.clear()
 		this.mutes.clear()
@@ -57,12 +64,12 @@ export class WotGraph extends EventEmitter {
 		this.emit('rebuilt')
 	}
 
-	/** Start periodic refresh of the trust graph */
-	startRefresh(indexes: IndexSubs): void {
+	/** Start periodic refresh of the trust graph (thunk: see rebuild) */
+	startRefresh(getIndexes: () => IndexSubs): void {
 		if (this.refreshTimer) return
 		this.refreshTimer = setInterval(
 			() =>
-				this.rebuild(indexes).catch((err) =>
+				this.rebuild(getIndexes).catch((err) =>
 					logger.error('WoT refresh failed', { error: String(err) }),
 				),
 			this.config.refreshIntervalMs,

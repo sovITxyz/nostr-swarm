@@ -9,12 +9,15 @@ import { ReplicationPolicyEngine } from '../wot/policy.js'
 /**
  * Light client wrapper around EventStore.
  *
- * Applies WoT-based filtering to incoming events and periodically
- * prunes events that have exceeded their trust-tier TTL.
+ * Applies WoT-based filtering to incoming events.
  *
  * Full relay nodes don't use this — they store everything.
  * Light clients (phones, constrained devices) use this to keep
  * storage manageable while prioritizing socially relevant events.
+ *
+ * Note: TTL-based pruning is disabled this release (see prune()) —
+ * it forged unsigned kind-5 ops that the consensus apply() now drops,
+ * and in a shared base they would otherwise act as global deletions.
  */
 export class LightStore extends EventEmitter {
 	readonly store: EventStore
@@ -23,6 +26,7 @@ export class LightStore extends EventEmitter {
 	private readonly wotConfig: WotConfig
 	private readonly lightConfig: LightClientConfig
 	private pruneTimer: ReturnType<typeof setInterval> | null = null
+	private pruneWarningLogged = false
 
 	constructor(store: EventStore, wotConfig: WotConfig, lightConfig: LightClientConfig) {
 		super()
@@ -37,10 +41,10 @@ export class LightStore extends EventEmitter {
 		await this.store.ready()
 
 		// Build initial trust graph from stored events
-		await this.wot.rebuild(this.store.indexes)
+		await this.wot.rebuild(() => this.store.indexes)
 
 		// Start periodic WoT refresh
-		this.wot.startRefresh(this.store.indexes)
+		this.wot.startRefresh(() => this.store.indexes)
 
 		// Start periodic pruning
 		if (this.lightConfig.pruneIntervalMs > 0) {
@@ -112,52 +116,19 @@ export class LightStore extends EventEmitter {
 	}
 
 	/**
-	 * Prune events that have exceeded their WoT TTL.
-	 * Scans the created_at index from oldest to newest, removing
-	 * events whose author's trust tier TTL has been exceeded.
+	 * Warn-once no-op. TTL pruning used to append forged, unsigned kind-5 ops —
+	 * the consensus apply() drops those (signature re-verification), and in a
+	 * shared multi-writer base they would otherwise act as global deletions.
+	 * True local pruning (hypercore clearing) is deferred; until then
+	 * LIGHT_MAX_STORAGE is not enforced and degrades to this warning.
 	 */
 	async prune(): Promise<void> {
-		const startTime = Date.now()
-		let pruned = 0
-
-		const subs = this.store.indexes
-		const stream = subs.createdAt.createReadStream({
-			gte: '',
-			lt: '~',
-			reverse: true, // oldest first (highest inverted timestamp = oldest)
-		})
-
-		for await (const entry of stream) {
-			const eventId = entry.value as string
-			const eventEntry = await subs.events.get(eventId)
-			if (!eventEntry) continue
-
-			const event = eventEntry.value as NostrEvent
-
-			// Never prune kind 0 (profiles), kind 3, or kind 10000 (WoT graph data)
-			if (event.kind === 0 || event.kind === 3 || event.kind === 10000) continue
-
-			if (this.policy.isExpiredByPolicy(event)) {
-				// Append a deletion op to remove this event
-				await this.store.deleteEvent({
-					id: `prune-${eventId}`,
-					pubkey: event.pubkey,
-					created_at: Math.floor(Date.now() / 1000),
-					kind: 5,
-					tags: [['e', eventId]],
-					content: 'pruned by WoT policy',
-					sig: '',
-				})
-				pruned++
-			}
-		}
-
-		if (pruned > 0) {
-			logger.info('WoT pruning complete', {
-				pruned,
-				elapsed: `${Date.now() - startTime}ms`,
-			})
-		}
+		if (this.pruneWarningLogged) return
+		this.pruneWarningLogged = true
+		logger.warn(
+			'Light-client TTL pruning is disabled this release; LIGHT_MAX_STORAGE is not enforced',
+			{ maxStorageBytes: this.lightConfig.maxStorageBytes },
+		)
 	}
 
 	/** Count stored events for a pubkey, excluding exempt kinds (0, 3, 10000). */

@@ -1,13 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { NostrSwarm } from '../../src/relay.js'
-import { connectClient, createRelay, createSignedEvent, sendAndCollect, waitForMessage } from '../helpers.js'
 import type WebSocket from 'ws'
+import type { NostrSwarm } from '../../src/relay.js'
+import type { NostrEvent } from '../../src/util/types.js'
+import {
+	connectClient,
+	createRelay,
+	createSignedEvent,
+	destroyTestnet,
+	getTestnet,
+	sendAndCollect,
+	waitForMessage,
+} from '../helpers.js'
 
 describe('relay integration', () => {
 	let relay: NostrSwarm
 	let ws: WebSocket
 
 	beforeAll(async () => {
+		await getTestnet()
 		relay = await createRelay()
 		ws = await connectClient(relay.config.port)
 	})
@@ -15,6 +25,7 @@ describe('relay integration', () => {
 	afterAll(async () => {
 		ws.close()
 		await relay.stop()
+		await destroyTestnet()
 	})
 
 	it('accepts and returns an event', async () => {
@@ -28,16 +39,13 @@ describe('relay integration', () => {
 		expect(okMsg[2]).toBe(true)
 
 		// Query it back
-		const results = await sendAndCollect(
-			ws,
-			['REQ', 'test-sub', { ids: [event.id] }],
-			'EOSE',
-		)
+		const results = await sendAndCollect(ws, ['REQ', 'test-sub', { ids: [event.id] }], 'EOSE')
 
 		const events = results.filter((m) => m[0] === 'EVENT')
 		expect(events.length).toBe(1)
-		expect((events[0]![2] as any).id).toBe(event.id)
-		expect((events[0]![2] as any).content).toBe('integration test')
+		const stored = events[0]?.[2] as NostrEvent
+		expect(stored.id).toBe(event.id)
+		expect(stored.content).toBe('integration test')
 
 		// Clean up subscription
 		ws.send(JSON.stringify(['CLOSE', 'test-sub']))
@@ -54,14 +62,10 @@ describe('relay integration', () => {
 		await waitForMessage(ws) // OK
 
 		// Query kind 7 only
-		const results = await sendAndCollect(
-			ws,
-			['REQ', 'kind-sub', { kinds: [7] }],
-			'EOSE',
-		)
+		const results = await sendAndCollect(ws, ['REQ', 'kind-sub', { kinds: [7] }], 'EOSE')
 
 		const events = results.filter((m) => m[0] === 'EVENT')
-		const hasKind7 = events.some((m) => (m[2] as any).id === e2.id)
+		const hasKind7 = events.some((m) => (m[2] as NostrEvent).id === e2.id)
 		expect(hasKind7).toBe(true)
 
 		// Should not have kind 1 events in a kind-7-only query... unless previously stored kind 1 events exist
@@ -70,15 +74,11 @@ describe('relay integration', () => {
 	})
 
 	it('handles COUNT', async () => {
-		const results = await sendAndCollect(
-			ws,
-			['COUNT', 'count-q', { kinds: [1] }],
-			'COUNT',
-		)
+		const results = await sendAndCollect(ws, ['COUNT', 'count-q', { kinds: [1] }], 'COUNT')
 
 		const countMsg = results.find((m) => m[0] === 'COUNT')
 		expect(countMsg).toBeDefined()
-		expect((countMsg![2] as any).count).toBeGreaterThanOrEqual(1)
+		expect((countMsg?.[2] as { count: number }).count).toBeGreaterThanOrEqual(1)
 	})
 
 	it('rejects invalid event structure', async () => {
@@ -102,11 +102,7 @@ describe('relay integration', () => {
 
 	it('live subscription receives new events', async () => {
 		// Open a subscription for kind 42
-		const subResults = await sendAndCollect(
-			ws,
-			['REQ', 'live-sub', { kinds: [42] }],
-			'EOSE',
-		)
+		const subResults = await sendAndCollect(ws, ['REQ', 'live-sub', { kinds: [42] }], 'EOSE')
 		expect(subResults.some((m) => m[0] === 'EOSE')).toBe(true)
 
 		// Now publish a kind 42 event — it should arrive on the subscription

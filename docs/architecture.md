@@ -4,7 +4,7 @@ This document describes the internal architecture of nostr-swarm: how events flo
 
 ## Overview
 
-nostr-swarm is a Nostr relay where every instance is a peer, not a server. There is no central coordinator. Multiple relay nodes join a shared Hyperswarm topic, replicate their Corestore over encrypted peer-to-peer connections, and Autobase linearizes all writes into a single deterministic Hyperbee view. The result is that every peer ends up with the same indexed database of Nostr events, regardless of join order or network partitions.
+nostr-swarm is a Nostr relay where every instance is a peer, not a server. There is no central coordinator. One node per swarm (the **founder**) creates a multi-writer Autobase; every other node (a **joiner**) is configured with the founder's bootstrap key -- shared as a checksummed `nsw1…` invite -- and deterministically opens the same base. Peers discover each other on a shared Hyperswarm topic and replicate the base over encrypted peer-to-peer connections, and Autobase linearizes all admitted writers' operations into a single deterministic Hyperbee view. Every node of one base converges to the same indexed database of Nostr events; convergence holds by construction, independent of the runtime order in which nodes start or connect (a joiner may even start before the founder is reachable). Reads need no admission -- any replica fully materializes the view -- while write access is granted manually by the operator of any existing writer (`--admit`).
 
 On top of the P2P layer, each node also runs a standard WebSocket server that speaks the Nostr relay protocol (NIP-01), so existing Nostr clients can connect over `ws://` or `wss://` without knowing anything about Hyperswarm.
 
@@ -43,13 +43,17 @@ On top of the P2P layer, each node also runs a standard WebSocket server that sp
 
 The `NostrSwarm` class (`src/relay.ts`) orchestrates startup:
 
-1. **EventStore.ready()** -- Opens the Corestore, initializes the Autobase with its linearized Hyperbee view, and creates all sub-database indexes. The Autobase key is generated on first run and persisted in the Corestore. If light client mode is enabled, `LightStore.ready()` wraps this step and also builds the initial WoT graph.
+1. **Bootstrap resolution** (constructor) -- `resolveBootstrap(storagePath, config.bootstrap)` (`src/storage/bootstrap.ts`) runs before the EventStore exists. It parses the configured `nsw1…` invite or 64-hex base key (a malformed value is a fatal error -- never a silently re-founded empty node), checks it against `<storage>/bootstrap-key` (a mismatch with the recorded base is fatal), and returns the base key to open -- or `null`, which means this node founds a new base.
 
-2. **WoT graph build** (optional) -- If `WOT_OWNER_PUBKEY` is set, the `WotGraph` scans kind 3 and kind 10000 events to build the trust graph via BFS from the owner pubkey. Periodic refresh begins (default: every 5 minutes). See [Web of Trust](web-of-trust.md) for details.
+2. **EventStore.ready()** -- Opens the Corestore, initializes the Autobase (with the resolved bootstrap, or as founder) and its linearized Hyperbee view. On ready, the relay logs the invite (`nsw1…`), raw base key, and this node's writer key (`base.local.key`), records the base identity in `<storage>/bootstrap-key`, and writes `<storage>/keys.json` (surfaced by Start9 properties). If light client mode is enabled, `LightStore.ready()` wraps this step and also builds the initial WoT graph.
 
-3. **RelayServer.start()** -- Starts an HTTP server on the configured port/host. The HTTP server serves NIP-11 relay information on `GET` with `Accept: application/nostr+json`, and upgrades WebSocket connections for the Nostr relay protocol.
+3. **Writer admissions** -- Each key in `config.admitWriters` (`--admit` / `ADMIT_WRITERS`) is appended as an `add_writer` op -- immediately if this node is already writable (founder or admitted writer), otherwise as soon as its own `'writable'` event fires. Already-admitted keys are skipped, so the flags are safe to leave in place.
 
-4. **SwarmNetwork.start()** -- Derives a topic buffer from `sha256("nostr-swarm:" + topic)`, joins the Hyperswarm DHT as both server and client, and begins accepting peer connections. Every incoming peer socket is handed to `corestore.replicate(socket)`.
+4. **WoT graph build** (optional) -- If `WOT_OWNER_PUBKEY` is set, the `WotGraph` scans kind 3 and kind 10000 events to build the trust graph via BFS from the owner pubkey. Periodic refresh begins (default: every 5 minutes). See [Web of Trust](web-of-trust.md) for details.
+
+5. **RelayServer.start()** -- Starts an HTTP server on the configured port/host. The HTTP server serves NIP-11 relay information on `GET` with `Accept: application/nostr+json`, and upgrades WebSocket connections for the Nostr relay protocol.
+
+6. **SwarmNetwork.start()** -- Derives a topic buffer from `sha256("nostr-swarm:" + topic)`, joins the Hyperswarm DHT as both server and client, and begins accepting peer connections. Every incoming peer socket is handed to `store.base.replicate(socket)` -- replication goes through the Autobase (not the raw Corestore) so the protomux-wakeup protocol announces writer heads to the peer.
 
 Shutdown is the reverse: stop WoT refresh, close all WebSocket connections, leave the swarm, close the Autobase and Corestore.
 
@@ -59,13 +63,13 @@ nostr-swarm builds on four Holepunch primitives. Understanding their roles is ke
 
 ### Corestore
 
-`Corestore` manages a collection of Hypercores (append-only logs) under a single storage directory. Each peer has its own writable Hypercore for appending operations, plus read-only replicas of other peers' cores. When two peers connect, `corestore.replicate(socket)` handles the entire replication protocol -- exchanging core keys, syncing missing blocks, and verifying integrity via Merkle trees.
+`Corestore` manages a collection of Hypercores (append-only logs) under a single storage directory. Each peer has its own local Hypercore (writable into the base only once admitted), plus read-only replicas of other writers' cores. The Hypercore replication protocol -- exchanging core keys, syncing missing blocks, verifying integrity via Merkle trees -- runs over each peer socket; nostr-swarm drives it through `store.base.replicate(socket)` so Autobase can announce writer heads on the same connection.
 
 Storage path is configured via `--storage` or `STORAGE_PATH` (default: `./nostr-swarm-data`).
 
 ### Autobase
 
-`Autobase` sits on top of Corestore and solves the multi-writer problem. Each peer appends operations (`put` or `delete`) to their own local Hypercore. Autobase reads all peers' cores, applies a deterministic linearization algorithm, and feeds the ordered operations into an `apply` function that builds the materialized view.
+`Autobase` sits on top of Corestore and solves the multi-writer problem. Each admitted writer appends operations (`put`, `delete`, or `add_writer`) to its own local Hypercore. Autobase reads all writers' cores, applies a deterministic linearization algorithm, and feeds the ordered operations into an `apply` function that builds the materialized view. Non-writers replicate the same cores and run the same apply, so they materialize the full view read-only.
 
 The critical property: **every peer running the same apply function on the same set of inputs produces the exact same view**, regardless of the order they received the data. This is what makes the system eventually consistent without any coordination protocol.
 
@@ -80,13 +84,15 @@ this.base = new Autobase(this.corestore, bootstrap, {
   apply: this.apply.bind(this),
   valueEncoding: 'json',
   ackInterval: 1000,  // ack every second to advance the view
+  optimistic: true,   // reserved for v2 (constructor-gated; see below)
 })
 ```
 
 - **open** -- Creates the materialized view. In our case, a Hyperbee (sorted B-tree over a Hypercore).
-- **apply** -- The deterministic function that processes linearized operations and writes to the view.
-- **ackInterval** -- How often this peer acknowledges it has seen the latest state. Acks are themselves operations that advance the linearization.
-- **bootstrap** -- The key of the first Autobase instance. Other peers need this to join the same multi-writer base.
+- **apply** -- The deterministic function that processes linearized operations and writes to the view (see "The apply function" below -- it is a versioned consensus protocol).
+- **ackInterval** -- How often the indexer acknowledges it has seen the latest state. Acks are themselves operations that advance the linearization.
+- **bootstrap** -- The key of the founder's Autobase, resolved by `resolveBootstrap` from the configured invite or the `<storage>/bootstrap-key` file. `null` means this node founds a new base.
+- **optimistic** -- Reserved now because it cannot be retrofitted without a consensus bump. v1's apply never acks optimistic blocks, so they are always rolled back; the option exists so v2 can add self-verifying optimistic writes from light/Pear peers.
 
 ### Hyperbee
 
@@ -112,21 +118,22 @@ The default topic string is `"nostr"`, so the default topic hash is `sha256("nos
 
 ### EventStore (`src/storage/store.ts`)
 
-The EventStore wraps Autobase and exposes two write operations:
+The EventStore wraps Autobase and exposes its write operations:
 
 - **putEvent(event)** -- Appends a `{ type: 'put', event }` operation to the local Hypercore.
 - **deleteEvent(event)** -- Appends a `{ type: 'delete', event }` operation (for NIP-09 kind 5 deletion events).
+- **admitWriter(keyHex)** -- Appends a `{ type: 'add_writer', key }` operation for an operator-approved joiner. Throws if this node is not writable; returns `'appended'`, `'already-admitted'`, or `'cap-reached'` as a fast pre-check (`apply()` is authoritative).
 
-These operations are not applied immediately. They go into the local append-only log and are linearized by Autobase across all peers. The `apply` function is called with batches of linearized operations.
+These operations are not applied immediately. They go into the local append-only log and are linearized by Autobase across all writers. The `apply` function is called with batches of linearized operations.
 
-The EventStore also emits `event:stored` when a new event is committed to the view. The WebSocket handler listens for this to push live subscription updates to connected clients.
+The EventStore also exposes the multi-writer surface: `writable` (can this node append?), `localWriterKey` (`base.local.key` -- what an operator sends out-of-band to get admitted), `isFounder`, and `listWriters()`. It re-emits the base's `'writable'` (this node's admission was applied -- no restart needed) and `'update'` events, and emits `event:stored` when a new event is committed to the view (deduped through a bounded 4096-id LRU, since reorgs re-run apply). The WebSocket handler listens for `event:stored` to push live subscription updates to connected clients.
 
 ### The apply function
 
-The apply function (`EventStore.apply`) is the core of the consensus model. It receives an ordered batch of operations from Autobase's linearization and writes to the Hyperbee view:
+The apply function (`EventStore.apply`) is the core of the consensus model -- a **versioned consensus protocol** (`CONSENSUS_VERSION = 1`). Every rule is deterministic and config-free, because all peers of one base re-run it over the same ops and must materialize identical views. All peers of one base must run the same software version; ops carrying a consensus version higher than the local one halt the node (`host.interrupt`) rather than diverge.
 
 ```
-Operations from all peers
+Operations from all writers
         │
         ▼
 ┌─────────────────┐
@@ -136,31 +143,44 @@ Operations from all peers
          │ ordered batch
          ▼
 ┌─────────────────┐
-│  apply function  │──► Hyperbee view (10 sub-databases)
+│  apply function  │──► Hyperbee view (11 sub-databases)
 └─────────────────┘
 ```
 
-For each operation in the batch:
+For each operation in the batch (null-valued ack nodes are skipped):
+
+**Version gate** -- `op.v > CONSENSUS_VERSION` interrupts the node ("unsupported op version").
 
 **Put operations:**
-1. **Dedup** -- Skip if an event with this ID already exists in the events sub-db.
-2. **Deletion check** -- Skip if this event ID was previously marked as deleted.
-3. **Replaceable handling** (kinds 0, 3, 10000-19999) -- Check if a newer event already exists for this pubkey+kind. If the incoming event is newer, remove the old event's indexes and update the replaceable pointer.
-4. **Addressable handling** (kinds 30000-39999) -- Same as replaceable, but keyed by pubkey+kind+d-tag.
-5. **Ephemeral skip** (kinds 20000-29999) -- Ephemeral events are never stored.
-6. **Write event** to the primary events sub-db.
-7. **Write secondary indexes** -- kind, author, author+kind, created_at, tags, expiration.
+1. **Re-validation** -- `validateEventStructure` + `verifyEventSignature`, or the op is skipped. Replicated ops are never trusted: an admitted writer cannot bypass the WS-edge validation, so even a rogue writer can only inject validly signed Nostr events.
+2. **NIP-70 skip** -- protected (`["-"]`-tagged) events are skipped unconditionally; a replicated store cannot honor "don't propagate".
+3. **Dedup** -- Skip if an event with this ID already exists in the events sub-db.
+4. **Tombstone check** -- Skip if this event ID has a tombstone *authored by the same pubkey*. Tombstones are `{ id: <kind5 id>, pubkey: <deleter> }`; a forged tombstone from another pubkey never censors a legitimate put, and delete-before-put ordering is safe. Legacy string tombstones (pre-multi-writer single-node data) block unconditionally, preserving old local behavior.
+5. **Replaceable handling** (kinds 0, 3, 10000-19999) -- Check if a newer event already exists for this pubkey+kind. If the incoming event is newer, remove the old event's indexes and update the replaceable pointer.
+6. **Addressable handling** (kinds 30000-39999) -- Same as replaceable, but keyed by pubkey+kind+d-tag.
+7. **Ephemeral skip** (kinds 20000-29999) -- Ephemeral events are never stored.
+8. **Write event** to the primary events sub-db.
+9. **Write secondary indexes** -- kind, author, author+kind, created_at, tags, expiration.
 
 **Delete operations** (NIP-09):
-1. For each `e` tag in the kind 5 deletion event, look up the target event.
-2. Only the original author can delete their events (pubkey check).
-3. Remove the target event and all its secondary indexes.
-4. Record the deletion in the deletion sub-db (prevents the deleted event from being re-inserted by a late-arriving peer).
-5. Store the deletion event itself as a regular event.
+1. **Re-validation** -- the kind 5 event itself must be structurally valid and signed, or the op is skipped (this also drops legacy forged prune ops).
+2. For each `e` tag, look up the target event. If stored, remove it (and its indexes) only when `target.pubkey === deletion.pubkey` -- only authors delete their own events.
+3. **Always** record the tombstone `{ id, pubkey }` in the deletion sub-db; its blocking power is scoped to the deleter's own pubkey (see put rule 4).
+4. Store the deletion event itself via the put path (re-validated there too).
+
+**add_writer operations:**
+1. The key must match `/^[0-9a-f]{64}$/` and not be the founder's own key (implicit, never in the sub).
+2. Duplicates (already in the `writers` sub) are no-ops; the sub is capped at **64 writers**, enforced deterministically (the count is part of the view).
+3. `host.addWriter(key, { indexer: false })` -- **every admission is a non-indexer**. The founder stays the sole indexer, so checkpoint/fast-forward liveness never depends on churny peers. The trade-off: founder loss stalls checkpoints (writes still merge; cold joins linearize slowly), which is why founder storage backups are operationally critical.
+4. The admission is recorded in the `writers` sub as `{ addedBy: <appender's writer key> }`.
+
+When the apply rules change (as they did when multi-writer shipped), already-materialized views are not retroactively rewritten: a joiner adopting a legacy founder's base relies on Autobase fast-forward (default on) to inherit the founder's signed view, and only the short un-indexed tail re-applies under the new rules. The cleanest shared bases start from a fresh founder.
+
+`removeIndexes` deletes the replaceable/addressable pointer only when it still references the deleted event id -- deleting a superseded version must not orphan the pointer to its replacement.
 
 ### Index schema
 
-The Hyperbee view is divided into 10 sub-databases, each a separate key-value namespace:
+The Hyperbee view is divided into 11 sub-databases, each a separate key-value namespace:
 
 | Sub-database | Key format | Value | Purpose |
 |---|---|---|---|
@@ -173,7 +193,8 @@ The Hyperbee view is divided into 10 sub-databases, each a separate key-value na
 | `replaceable` | `pubkey!kind` | `event_id` | Latest replaceable event |
 | `addressable` | `pubkey!kind!d_tag` | `event_id` | Latest addressable event |
 | `expiration` | `inv_expiry!event_id` | `event_id` | NIP-40 expiration tracking |
-| `deletion` | `event_id` | `kind5_event_id` | Deletion tombstones |
+| `deletion` | `event_id` | `{ id: kind5_id, pubkey: deleter }` | Deletion tombstones (pubkey-scoped; legacy values are plain strings) |
+| `writers` | `writer_key_hex` | `{ addedBy: writer_key_hex }` | Admitted writers (founder implicit, never listed) |
 
 ### Key encoding (`src/util/keys.ts`)
 
@@ -242,12 +263,13 @@ The MessageHandler processes all client-to-relay messages:
 2. Structural validation (correct field types and lengths)
 3. Schnorr signature verification via `nostr-tools`
 4. NIP-40 expiration check (reject already-expired events)
-5. NIP-70 protected event check (require AUTH for events with `-` tag)
-6. Kind classification:
-   - Ephemeral (20000-29999): broadcast to matching subscriptions but don't store
+5. NIP-70 check: protected events (`-` tag) are rejected unconditionally -- a replicated store cannot honor "don't propagate"
+6. Ephemeral kinds (20000-29999): broadcast to matching subscriptions but don't store
+7. Read-only gate: if this node is not (yet) an admitted writer, reply `["OK", id, false, "blocked: read-only replica awaiting writer admission"]` -- reads (REQ/COUNT) are unaffected
+8. Kind classification:
    - Deletion (kind 5): route to `store.deleteEvent()`
    - All others: route to `store.putEvent()`
-7. Send OK response
+9. Send OK response
 
 **REQ** -- Subscription creation:
 1. Rate limit check
@@ -299,7 +321,7 @@ Full implementation of the Nostr relay protocol: EVENT, REQ, CLOSE, OK, EOSE, NO
 Kind 5 events reference target events via `e` tags. The relay:
 - Only allows the original author to delete their events (pubkey must match)
 - Removes the target event and all its secondary indexes
-- Records a tombstone in the deletion sub-db to prevent re-insertion
+- Records a tombstone `{ id, pubkey }` in the deletion sub-db; the tombstone blocks re-insertion only of events authored by the deleter's own pubkey (a forged tombstone cannot censor someone else's event)
 - Stores the deletion event itself
 
 ### NIP-11: Relay information
@@ -321,53 +343,55 @@ Challenge-response authentication:
 3. Relay verifies the signature, challenge, relay tag, and timestamp
 4. On success, the connection's `authPubkey` is set
 
-Authentication is optional -- it's only required for submitting NIP-70 protected events.
+Authentication is optional -- no relay feature currently requires it.
 
-### NIP-70: Protected events
+### NIP-70: Protected events (rejected)
 
-Events with a `-` tag can only be submitted by authenticated connections where `authPubkey` matches `event.pubkey`. This prevents unauthorized relays from replaying protected events.
+Events with a `-` tag are rejected unconditionally at the WebSocket edge (`blocked: protected events (NIP-70) are not accepted by replicated relays`) and skipped by the consensus apply function. A replicated multi-writer store cannot honor "don't propagate" -- any peer of the base would re-serve the event -- and NIP-70 explicitly blesses rejection. The relay never accepts-then-drops, and the behavior is never config-dependent (per-node config in a consensus rule would fork views). NIP-70 is not listed in `supported_nips`. This is a deliberate behavior change that applies to single-node deployments too.
 
 ## Peer-to-peer replication
 
 ### How peers sync
 
-When two peers connect over Hyperswarm:
+Two peers only sync the same database when they were configured onto the same base (founder/joiner, see below). When two such peers connect over Hyperswarm:
 
-1. Hyperswarm handles peer discovery via the DHT and establishes an encrypted Noise protocol connection.
-2. The socket is passed to `corestore.replicate(socket)`.
-3. Corestore exchanges Hypercore keys and begins syncing all cores:
-   - Each peer's local writable core (their append-only operation log)
-   - The Autobase view core
-   - Any other cores managed by the Autobase
+1. Hyperswarm handles peer discovery via the DHT and establishes an encrypted Noise protocol connection (mutually authenticated; possession of the base key is what grants read replication -- the DHT sees only hashes).
+2. The socket is passed to `store.base.replicate(socket)` -- the Autobase replicates the underlying Corestore and additionally announces writer heads via the protomux-wakeup protocol.
+3. Replication exchanges Hypercore keys and begins syncing all cores:
+   - Each writer's core (their append-only operation log)
+   - The Autobase view/system cores
 4. As new blocks arrive, Autobase detects changes and re-linearizes.
-5. The apply function runs on the new operations, updating the Hyperbee view.
+5. The apply function runs on the new operations, updating the Hyperbee view. This includes `add_writer` ops: when a joiner sees its own admission applied, its base emits `'writable'` and it starts accepting writes -- no restart.
 6. The EventStore emits `event:stored` for any newly visible events.
 7. The MessageHandler pushes those events to matching WebSocket subscriptions.
 
-This means a WebSocket client connected to peer A will receive events that were originally submitted to peer B, with no explicit forwarding -- the data flows through Autobase replication.
+This means a WebSocket client connected to peer A will receive events that were originally submitted to peer B, with no explicit forwarding -- the data flows through Autobase replication. Peers that merely share a *topic* but not a *base* exchange connections, not data: each keeps its own independent view.
 
-### Bootstrap key problem
+### Bootstrap key (solved: invites + persistence guard)
 
-The first Autobase instance generates a key that identifies the multi-writer base. Other peers need this key to join the same base. Currently, this must be configured manually (passed as the `bootstrap` parameter to `EventStore`).
+The founder's Autobase key identifies the multi-writer base; every other node needs it to join. This used to be an undocumented manual step -- it is now an explicit, typo-proof workflow:
 
-The `src/swarm/protocol.ts` module is a placeholder for a future protocol extension that could handle key discovery over the swarm -- for example, announcing the Autobase bootstrap key to peers that join the topic.
+- **Invite codec** (`src/util/invite.ts`): the base key is shared operator-to-operator as `'nsw1' + z32(version || baseKey || sha256-checksum)`. A corrupted `--bootstrap`/`BOOTSTRAP_KEY` value fails fast at startup -- it can never silently found a fresh, empty base. Raw 64-hex keys are still accepted for scripting. The invite (and this node's writer key) are logged at startup and written to `<storage>/keys.json`.
+- **Persistence guard** (`src/storage/bootstrap.ts`): `resolveBootstrap` records the base identity in `<storage>/bootstrap-key` on first start. From then on the storage directory is pinned to that base: configuring a different bootstrap key is a fatal error, making accidental re-founding impossible. Joining a different base requires a fresh storage path (migrate events with `nostr-swarm export` / `import`).
+
+Exactly one node per swarm starts without a bootstrap (the founder); a two-founder operator error creates a permanent split whose recovery is export/import. There is no in-band key discovery in v1 -- `src/swarm/protocol.ts` carries the complete contract for the v2 in-band admission channel (`nostr-swarm/admission@1`), which a later release can implement without redesign.
 
 ### Pear Runtime integration
 
-A Pear Runtime app is a full peer, identical to a relay node from the replication perspective. It:
+A Pear Runtime app is a read-mostly peer: identical to a relay node from the replication perspective, but not an admitted writer. It:
 
 1. Opens its own Corestore
 2. Joins the same Hyperswarm topic (`sha256("nostr-swarm:" + topic)`)
 3. Replicates with all peers on the topic
-4. Opens the same Autobase with the shared bootstrap key
-5. Reads and writes events through the Hyperbee view
+4. Opens the same Autobase with the founder's base key (decoded from the invite)
+5. Reads the full view locally through the Hyperbee; writes go through a relay's WebSocket endpoint
 
-The Pear client does not need the WebSocket layer, the HTTP server, the NIP-11 endpoint, or any of the rate limiting. It operates directly on the shared data structure. It can use the same apply function and index schema, or implement its own read-only view optimized for its UI.
+The Pear client does not need the WebSocket *server* layer, the NIP-11 endpoint, or any of the rate limiting. It reads directly on the shared data structure. It can use the same apply function and index schema, or implement its own read-only secondary view optimized for its UI (the primary apply must match exactly).
 
 ```
 ┌─────────────────────┐         ┌─────────────────────┐
-│    Relay Node A      │         │    Relay Node B      │
-│                      │         │                      │
+│  Relay Node A        │         │  Relay Node B        │
+│  (founder/writer)    │         │  (admitted writer)   │
 │  WS ◄─► EventStore  │◄───────►│  EventStore ◄─► WS  │
 │         Autobase     │ Swarm   │  Autobase            │
 │         Corestore    │         │  Corestore           │
@@ -378,14 +402,14 @@ The Pear client does not need the WebSocket layer, the HTTP server, the NIP-11 e
      ┌─────┴───────────────────────────────┴─────┐
      │                                           │
 ┌────┴────────────────┐         ┌────────────────┴───┐
-│   Pear Client X      │         │   Pear Client Y     │
-│                      │         │                      │
+│  Pear Client X       │         │  Pear Client Y      │
+│  (read-mostly)       │         │  (read-mostly)      │
 │  UI ◄─► Autobase    │◄───────►│  Autobase ◄─► UI   │
 │         Corestore    │ Swarm   │  Corestore           │
 └──────────────────────┘         └──────────────────────┘
 ```
 
-All four nodes replicate the same Autobase. An event written by Pear Client X will appear on Relay Node B's WebSocket interface, and vice versa.
+All four nodes replicate the same Autobase (same bootstrap). An event submitted to Relay Node A appears in Pear Client Y's local view, and an event a Pear client publishes via either relay's WebSocket endpoint reaches everyone. Light/Pear clients are never admitted as writers in this release, so they cannot append to the base directly -- un-admitted appends would be rolled back.
 
 ## Event kind classification
 
@@ -412,7 +436,9 @@ nostr-swarm includes an optional Web of Trust (WoT) module that filters events b
 WoT is enabled by setting `WOT_OWNER_PUBKEY`. It works in two modes:
 
 - **Full relay mode** (default): WoT filters incoming events but the relay keeps everything it has already stored. Useful for spam prevention on always-on nodes.
-- **Light client mode** (`LIGHT_CLIENT=true`): WoT filtering + periodic pruning. Events that exceed their trust tier TTL are removed. Designed for phones and constrained devices. See [Client Architecture](clients.md) for details.
+- **Light client mode** (`LIGHT_CLIENT=true`): WoT filtering at write time. TTL-based pruning is disabled this release (warn-once no-op): it used to append forged unsigned kind-5 ops, which the consensus apply drops -- and in a shared base they would otherwise act as global deletions. See [Client Architecture](clients.md) for details.
+
+WoT is strictly a **local pre-append / serve-time policy** -- it is never part of the apply()/consensus rules, because per-node trust graphs would diverge views. See [Web of Trust](web-of-trust.md).
 
 ## Configuration
 
@@ -422,12 +448,16 @@ All configuration flows through `src/util/config.ts`. Each setting has three lay
 2. **CLI flag / constructor override**
 3. **Default value** (lowest priority)
 
+Note the foot-gun: env beats CLI for every knob, including `BOOTSTRAP_KEY` over `--bootstrap` and `ADMIT_WRITERS` over `--admit`. This is kept for consistency with every existing setting.
+
 | Setting | Env var | CLI flag | Default |
 |---|---|---|---|
 | WebSocket port | `WS_PORT` | `--port` | 3000 |
 | Bind address | `WS_HOST` | -- | 0.0.0.0 |
 | Storage path | `STORAGE_PATH` | `--storage` | ./nostr-swarm-data |
 | Swarm topic | `SWARM_TOPIC` | `--topic` | nostr |
+| Bootstrap (invite or 64-hex base key) | `BOOTSTRAP_KEY` | `--bootstrap` | (empty -- found a new base) |
+| Admit writers (comma-separated / repeatable) | `ADMIT_WRITERS` | `--admit` | (empty) |
 | Relay name | `RELAY_NAME` | `--relay-name` | nostr-swarm |
 | Relay description | `RELAY_DESCRIPTION` | -- | A peer-to-peer Nostr relay over Hyperswarm |
 | Admin contact | `RELAY_CONTACT` | `--relay-contact` | (empty) |
@@ -442,27 +472,30 @@ All configuration flows through `src/util/config.ts`. Each setting has three lay
 | WoT max depth | `WOT_MAX_DEPTH` | `--wot-depth` | 3 |
 | WoT refresh interval | `WOT_REFRESH_MS` | -- | 300000 (5 min) |
 | Light client mode | `LIGHT_CLIENT` | `--light-client` | false |
-| Light max storage | `LIGHT_MAX_STORAGE` | -- | 524288000 (500 MB) |
-| Light prune interval | `LIGHT_PRUNE_MS` | -- | 600000 (10 min) |
+| Light max storage (not enforced this release) | `LIGHT_MAX_STORAGE` | -- | 524288000 (500 MB) |
+| Light prune interval (pruning is a warn-once no-op) | `LIGHT_PRUNE_MS` | -- | 600000 (10 min) |
 
 ## File map
 
 ```
 src/
-├── cli.ts                  Entry point (CLI argument parsing)
-├── relay.ts                NostrSwarm orchestrator (startup/shutdown)
+├── cli.ts                  Entry point (CLI parsing + export/import subcommands)
+├── relay.ts                NostrSwarm orchestrator (startup/shutdown, admissions)
 ├── index.ts                Public API exports
 ├── ws/
 │   ├── server.ts           HTTP + WebSocket server, NIP-11
 │   ├── connection.ts       Per-connection state, rate limiters
 │   └── handler.ts          Nostr message handling (EVENT/REQ/CLOSE/COUNT/AUTH)
 ├── storage/
-│   ├── store.ts            EventStore (Autobase + apply function)
+│   ├── store.ts            EventStore (Autobase + versioned consensus apply)
+│   ├── bootstrap.ts        Bootstrap-key persistence guard + keys.json writer
 │   ├── indexes.ts          Hyperbee sub-database definitions
 │   └── query.ts            Query engine (index selection, range scans)
 ├── swarm/
-│   ├── network.ts          Hyperswarm connection + Corestore replication
-│   └── protocol.ts         Swarm protocol extensions (placeholder)
+│   ├── network.ts          Hyperswarm connection + Autobase replication
+│   └── protocol.ts         v2 in-band admission channel contract (spec) + codec helpers
+├── tools/
+│   └── migrate.ts          export/import merge tooling (JSONL over validated WS)
 ├── wot/
 │   ├── graph.ts            WoT trust graph (BFS, degree computation, muting)
 │   ├── policy.ts           Replication policy engine (accept/reject, TTL)
@@ -479,8 +512,9 @@ src/
 │   ├── nip-42.ts           Authentication validation
 │   └── nip-70.ts           Protected event helpers
 ├── util/
-│   ├── types.ts            TypeScript interfaces (NostrEvent, NostrFilter, WotConfig, etc.)
+│   ├── types.ts            TypeScript interfaces (NostrEvent, NostrFilter, StoreOp, etc.)
 │   ├── config.ts           Configuration loading (relay, WoT, light client)
+│   ├── invite.ts           nsw1 invite codec (z32 + checksum) for bootstrap keys
 │   ├── keys.ts             Hyperbee key encoding (inverted timestamps, composites)
 │   ├── rate-limit.ts       Token bucket rate limiter
 │   └── logger.ts           Structured logger
