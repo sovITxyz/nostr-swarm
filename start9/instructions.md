@@ -1,6 +1,6 @@
 # nostr-swarm
 
-A fully peer-to-peer Nostr relay that syncs events over Hyperswarm. Every peer is equal -- no central server required.
+A fully peer-to-peer Nostr relay that syncs events over Hyperswarm -- no central server, hosting provider, or TLS required.
 
 ## Getting Started
 

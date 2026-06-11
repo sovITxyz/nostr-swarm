@@ -1,6 +1,6 @@
 # nostr-swarm
 
-A fully peer-to-peer Nostr relay that syncs events over Hyperswarm. Every peer is equal -- no central server required.
+A fully peer-to-peer Nostr relay that syncs events over Hyperswarm -- no central server, hosting provider, or TLS required.
 
 Built on the [Holepunch](https://holepunch.to) stack: Hyperswarm for connectivity, Autobase for multi-writer consensus, and Hyperbee for indexed storage.
 
@@ -137,7 +137,7 @@ Note: light-client TTL pruning is disabled this release. It used to append forge
 
 ### Peer-to-peer (native)
 
-Since nostr-swarm uses Hyperswarm for NAT hole-punching, every node is a peer -- no server infrastructure, TLS, or reverse proxy required. Just run the process:
+Since nostr-swarm uses Hyperswarm for NAT hole-punching, nodes connect directly -- no server infrastructure, TLS, or reverse proxy required. Just run the process:
 
 ```bash
 # First node: founds the base, logs its nsw1… invite
