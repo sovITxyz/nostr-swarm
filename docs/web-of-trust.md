@@ -2,6 +2,14 @@
 
 nostr-swarm includes a Web of Trust (WoT) system that filters events based on social graph distance from a configured owner pubkey. This keeps relay storage focused on socially relevant content and blocks spam from unknown or muted pubkeys.
 
+## WoT is local policy, not consensus
+
+WoT is strictly a **local pre-append / serve-time policy**. It decides which events *this node* appends to the shared base and which it serves to its own clients -- it is never an apply()/consensus rule. Every trust graph is rooted at a different owner pubkey, so per-node WoT inside the deterministic apply function would make peers materialize different views from the same operations, forking the shared database. The consensus layer stays config-free.
+
+Consequently, in a multi-writer base your WoT settings do not prevent *other admitted writers* from appending events your graph would reject: those events still enter the shared view on every peer. WoT bounds what your node contributes and (in light mode) what it accepts at its own write path.
+
+Independently of WoT, the apply function re-verifies every event's structure and Schnorr signature before it touches the view. WoT filtering never weakens that: even a fully trusted pubkey's events are dropped in apply() if they are malformed or carry a bad signature, and no WoT tier can launder an unsigned or forged event into the store.
+
 ## How it works
 
 The trust graph is built from Nostr events already stored in the relay:
@@ -125,12 +133,12 @@ trustByDegree: { 0: 1.0, 1: 0.9, 2: 0.7, 3: 0.5, 4: 0.2, 5: 0.1 }
 
 ### TTL (time-to-live)
 
-The `ttlByDegree` map sets how long events from each tier are kept (in seconds):
+The `ttlByDegree` map sets how long events from each tier are considered fresh (in seconds):
 
-- `0` means keep forever
-- Any positive number is the max age before pruning
+- `0` means no expiry
+- Any positive number is the max age before the tier's events are policy-expired (`isExpiredByPolicy`)
 
-Events from higher-trust tiers are kept longer. Events from lower-trust tiers are pruned more aggressively to save space.
+Note: TTL-based *pruning* (physically removing expired-tier events) is disabled this release -- see "Full relay vs. light client" below.
 
 ### Kind 0, Kind 3, and Kind 10000 exemption
 
@@ -182,4 +190,4 @@ Takes a `WotGraph` and a `WotConfig`, evaluates events:
 ## Full relay vs. light client
 
 - **Full relay** (Start9, VPS): WoT is optional. When enabled, it filters incoming events but the relay still serves everything it has stored. Useful for spam prevention.
-- **Light client** (phone, Pear Runtime): WoT + pruning. The light client uses WoT to decide what to replicate and aggressively prunes expired-tier events to save storage. See [Client Architecture](clients.md) for details.
+- **Light client** (phone, Pear Runtime): WoT filtering at write time. TTL pruning is **disabled this release** -- `LightStore.prune()` is a warn-once no-op and `LIGHT_MAX_STORAGE` is not enforced. The old pruning path appended forged, unsigned kind-5 deletion ops; the consensus apply now drops unsigned deletions, and in a shared multi-writer base they would otherwise have acted as global deletions on every peer. True local pruning (hypercore clearing) is deferred. See [Client Architecture](clients.md) for details.

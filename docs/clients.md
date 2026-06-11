@@ -22,7 +22,7 @@ nostr-swarm supports two fundamentally different client architectures: **WebSock
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Relay nodes and Pear clients are peers -- they replicate the full Autobase and can read/write events directly. Web clients are consumers that depend on a relay node as their gateway into the swarm.
+Relay nodes and Pear clients are peers -- configured with the same base (the founder's `nsw1…` invite), they replicate the full Autobase and read the full view locally. Writing into the base requires operator admission of a node's writer key (`--admit`); Pear/light clients are never admitted in this release, so they are **read-mostly** peers that publish through a relay's WebSocket endpoint. Web clients are consumers that depend on a relay node as their gateway into the swarm.
 
 ## WebSocket client (traditional)
 
@@ -76,10 +76,11 @@ ws.onmessage = (msg) => {
 The relay node handles everything the web client cannot do itself:
 
 - **Storage** -- Events are stored in the Autobase-backed Hyperbee. The web client keeps nothing locally.
-- **Replication** -- The relay syncs with all peers over Hyperswarm. Events from other nodes and Pear clients appear on the WebSocket as live subscription updates.
+- **Replication** -- The relay syncs with all peers of its base over Hyperswarm. Events written through other admitted nodes appear on the WebSocket as live subscription updates.
+- **Writer admission** -- Publishing only succeeds if the relay node itself is an admitted writer. A joiner that has not been admitted yet serves full reads but answers `EVENT` with `["OK", id, false, "blocked: read-only replica awaiting writer admission"]`.
 - **Indexing** -- The relay maintains secondary indexes (kind, author, tags, timestamps) for efficient filter queries.
 - **Rate limiting** -- Token bucket rate limiters protect the relay from abuse (configurable via `EVENT_RATE` and `REQ_RATE`).
-- **Authentication** -- NIP-42 challenge-response auth for protected events (NIP-70).
+- **Authentication** -- NIP-42 challenge-response auth is available (no feature currently requires it; protected events per NIP-70 are rejected outright -- a replicated relay cannot honor "don't propagate").
 
 ### Limitations
 
@@ -97,7 +98,7 @@ The relay node handles everything the web client cannot do itself:
 
 ## Pear Runtime client (native P2P)
 
-A Pear Runtime client is a full peer in the swarm. It joins the Hyperswarm topic, replicates the Corestore, and runs its own Autobase instance. It reads and writes events directly on the local Hyperbee -- no WebSocket, no relay dependency.
+A Pear Runtime client is a read-mostly peer in the swarm. It joins the Hyperswarm topic, replicates the base, and runs its own Autobase instance over the founder's bootstrap key. It reads events directly from the local Hyperbee -- no WebSocket, no relay dependency for reads. Publishing goes through an admitted relay's WebSocket endpoint, because light/Pear clients are never admitted as writers in this release.
 
 ### How it connects
 
@@ -111,16 +112,17 @@ Pear app (desktop / mobile via Pear Runtime)
       └──► other Pear clients
 ```
 
-The Pear client connects to every available peer on the topic. There is no special "server" -- all peers are equal. The client replicates data from whoever is online.
+The Pear client connects to every available peer on the topic. There is no special "server" -- the client replicates data from whichever peers of its base are online.
 
 ### Setup
 
-A Pear client needs four things from the Holepunch stack:
+A Pear client needs four things from the Holepunch stack, plus the relay's invite:
 
-1. **Corestore** -- Local storage for all Hypercores (the client's own write log + replicas of every other peer's log).
+1. **Corestore** -- Local storage for all Hypercores (replicas of every writer's log).
 2. **Hyperswarm** -- Peer discovery and encrypted connections.
-3. **Autobase** -- Multi-writer consensus. Linearizes all peers' operations into a deterministic order.
+3. **Autobase** -- Multi-writer consensus. Linearizes all admitted writers' operations into a deterministic order.
 4. **Hyperbee** -- The materialized view. A sorted B-tree of all Nostr events and indexes.
+5. **The invite** (`nsw1…`) -- obtained from a relay operator (see Bootstrap key below). It decodes to the founder's 32-byte base key.
 
 ```js
 import Hyperswarm from 'hyperswarm'
@@ -128,6 +130,7 @@ import Corestore from 'corestore'
 import Autobase from 'autobase'
 import Hyperbee from 'hyperbee'
 import { createHash } from 'crypto'
+import { decodeInvite } from 'nostr-swarm'   // src/util/invite.ts
 
 // Local storage -- this peer keeps a full copy of all data
 const store = new Corestore('./my-nostr-data')
@@ -136,13 +139,12 @@ const store = new Corestore('./my-nostr-data')
 const swarm = new Hyperswarm()
 const topic = createHash('sha256').update('nostr-swarm:nostr').digest()
 
-// Replicate with every peer that connects
-swarm.on('connection', (socket) => store.replicate(socket))
-swarm.join(topic, { server: true, client: true })
+// The invite is checksummed: a typo throws here instead of silently
+// opening a different (empty) base.
+const baseKey = decodeInvite('nsw1...')
 
 // Open the shared Autobase
-// bootstrapKey is the key from the first Autobase instance (see Bootstrap Key below)
-const base = new Autobase(store, bootstrapKey, {
+const base = new Autobase(store, baseKey, {
   open: (store) => new Hyperbee(store.get('view'), {
     keyEncoding: 'utf-8',
     valueEncoding: 'json',
@@ -151,6 +153,10 @@ const base = new Autobase(store, bootstrapKey, {
   valueEncoding: 'json',
 })
 await base.ready()
+
+// Replicate through the base with every peer that connects
+swarm.on('connection', (socket) => base.replicate(socket))
+swarm.join(topic, { server: true, client: true })
 ```
 
 ### Reading events
@@ -181,33 +187,41 @@ For a full client, reuse the query engine and index schema from the relay codeba
 
 ### Writing events
 
-Writing is an Autobase append. The operation goes into the local Hypercore and is replicated to all peers:
+Writes require admission. Appending into the base only takes effect for **admitted writers** -- nodes whose writer key (`base.local.key`) an operator of an existing writer has admitted via `--admit`. Light/Pear clients are never admitted in this release (a documented rule), so an un-admitted append is rolled back, not merged.
+
+A Pear client publishes the normal Nostr way instead -- send `EVENT` to any admitted relay's WebSocket endpoint and wait for the `OK`:
 
 ```js
-// Append a put operation (same schema as src/util/types.ts StoreOp)
-await base.append({ type: 'put', event: signedEvent })
+const ws = new WebSocket('ws://relay.local:3000')
+ws.send(JSON.stringify(['EVENT', signedEvent]))   // also kind-5 deletions
+```
 
-// Append a deletion (NIP-09)
+The relay validates the event (structure, signature, NIP-40, NIP-70) and appends it to the shared base; replication then carries it to every peer, including this client's local view.
+
+For completeness, an admitted relay node writes by Autobase append (same schema as `src/util/types.ts` `StoreOp`):
+
+```js
+await base.append({ type: 'put', event: signedEvent })
 await base.append({ type: 'delete', event: signedKind5Event })
 ```
 
-Autobase linearizes this operation with all other peers' operations and runs the apply function. The local Hyperbee view updates, and every other peer's view converges to the same state.
-
 ### The apply function
 
-The apply function **must be identical** across all peers -- relay nodes and Pear clients alike. It is what guarantees that every peer produces the same Hyperbee from the same set of inputs. The canonical implementation is in `src/storage/store.ts` (`EventStore.apply`).
+The apply function **must be identical** across all peers -- relay nodes and Pear clients alike. It is what guarantees that every peer produces the same Hyperbee from the same set of inputs. The canonical implementation is in `src/storage/store.ts` (`EventStore.apply`): a versioned consensus protocol (`CONSENSUS_VERSION = 1`) that re-verifies every event signature, scopes deletion tombstones to the deleter's pubkey, skips NIP-70 protected events, and processes `add_writer` admissions. All peers of one base must run the same consensus version -- ops from a newer version halt the node rather than diverge.
 
 If a Pear client uses a different apply function, its view will diverge from the relay nodes. This is fine for read-only secondary views (e.g. a UI-specific index), but the primary Autobase apply must match.
 
 ### Offline and sync
 
-Because the Pear client has its own Corestore, it works offline:
+Because the Pear client has its own Corestore, reads work offline: the full replicated view is on local disk. On reconnect, replication catches the client up with whatever peers are online -- no protocol round-trips, no re-querying.
 
-1. **Write while disconnected** -- Events are appended to the local Hypercore. They exist only on this peer until reconnection.
-2. **Reconnect** -- Corestore replication syncs the local log with all peers.
+For admitted writer nodes, offline writes also merge cleanly:
+
+1. **Write while disconnected** -- Operations are appended to the local Hypercore. They exist only on this peer until reconnection.
+2. **Reconnect** -- Replication syncs the local log with all peers.
 3. **Linearize** -- Autobase incorporates the new operations and re-runs apply. All peers converge.
 
-There is no conflict resolution protocol -- Autobase's deterministic linearization handles it. Two peers writing events while partitioned will produce the same final view once they sync.
+There is no conflict resolution protocol -- Autobase's deterministic linearization handles it. Two writers appending while partitioned will produce the same final view once they sync. A read-mostly Pear client that drafts events offline must hold them until it can reach a relay's WebSocket endpoint.
 
 ### What the Pear client does NOT need
 
@@ -248,25 +262,26 @@ await lightStore.ready()
 
 // Events from untrusted pubkeys are rejected at write time
 const accepted = await lightStore.putEvent(signedEvent) // true or false
-
-// Periodic pruning removes events that exceed their tier's TTL
 ```
 
 This is the recommended approach for phone clients. The light store:
 - Builds and refreshes the trust graph from kind 3/10000 events
 - Filters events at write time (rejects untrusted pubkeys)
-- Periodically prunes events that exceed their trust tier TTL
 - Always accepts kind 3 and kind 10000 events (needed for the WoT graph itself)
+
+**TTL pruning is disabled this release** (`prune()` is a warn-once no-op, and `maxStorageBytes` is not enforced). The old pruning path appended forged, unsigned kind-5 ops; the consensus apply now drops unsigned deletions, and in a shared multi-writer base they would otherwise have acted as *global* deletions on every peer. True local pruning (hypercore clearing) is deferred to a future release.
+
+Note that WoT filtering is **local policy only** -- it decides what this node appends and serves, never what the shared base accepts. See [Web of Trust](web-of-trust.md).
 
 See [Web of Trust](web-of-trust.md) for full details on scoring, tiers, and configuration.
 
 ### When to use
 
 - Desktop apps built on Pear Runtime
-- Environments where offline support matters
-- Scenarios where you want full data sovereignty (local replica, no relay trust)
+- Environments where offline reading matters
+- Scenarios where you want full data sovereignty (local replica, no relay trust for reads)
 - Apps that need low-latency reads (local disk, not network)
-- Peer-to-peer-only deployments with no WebSocket relay nodes at all
+- Read-only mirrors with no WebSocket relay nodes at all (publishing always needs an admitted relay's WS endpoint)
 
 ## Start9 as a home relay
 
@@ -283,31 +298,38 @@ A Start9 box running nostr-swarm is the ideal companion for Pear clients. It act
 
 ## Bootstrap key
 
-Both client types depend on the Autobase bootstrap key -- the public key of the first Autobase instance that created the multi-writer base. This key identifies which Autobase all peers are writing to.
+Every peer type depends on the Autobase bootstrap key -- the public key of the founder's Autobase. This key identifies which base all peers replicate and (if admitted) write to.
 
-### Current state
+### The invite codec
 
-The relay generates a bootstrap key on first startup and persists it in the Corestore. To add a second peer (relay or Pear client), the bootstrap key must be shared out-of-band: passed as configuration, copied from logs, embedded in a QR code, etc.
+The key is shared operator-to-operator as a checksummed invite, never raw hex in UIs:
 
-### Future: swarm key discovery
+```
+invite  = 'nsw1' + z32encode(payload)
+payload = version(0x01) || baseKey(32 bytes) || sha256(version || baseKey)[0..4)
+```
 
-`src/swarm/protocol.ts` is a placeholder for a protocol extension that would solve this automatically. The idea: when a peer joins the swarm topic, existing peers announce the Autobase bootstrap key over the Hyperswarm connection. New peers receive the key, open the Autobase, and begin replicating -- no manual configuration needed.
+The founder logs its invite at startup and writes it to `<storage>/keys.json` (Start9 surfaces it as a copyable property). Joining is pasting that invite into `--bootstrap` / `BOOTSTRAP_KEY` (relay) or decoding it with `decodeInvite` (Pear client, exported from the `nostr-swarm` package). The checksum makes the value typo-proof: corruption is a hard error, never a silently founded empty base. Raw 64-hex keys remain accepted for scripting.
 
-Until this is implemented, the bootstrap key is a manual setup step.
+On relays, `<storage>/bootstrap-key` pins the storage directory to its base after first start -- reconfiguring a different bootstrap is a fatal error (the re-founding guard in `src/storage/bootstrap.ts`).
+
+### Future: in-band admission (v2)
+
+`src/swarm/protocol.ts` carries the complete contract for a v2 in-band admission channel (`nostr-swarm/admission@1` over protomux): a joiner proves possession of the invite with an HMAC bound to the Noise session and requests admission in-band, removing the restart-to-admit step. It is specified but not implemented in this release; admission today is the operator-driven `--admit` flow.
 
 ## Comparison
 
 | | WebSocket Client | Pear Runtime Client |
 |---|---|---|
-| **Connection** | WebSocket to one relay node | Hyperswarm to all peers |
-| **Protocol** | NIP-01 JSON messages | Corestore replication |
+| **Connection** | WebSocket to one relay node | Hyperswarm to all peers of the base |
+| **Protocol** | NIP-01 JSON messages | Autobase replication |
 | **Data storage** | None (stateless) | Full local replica (or WoT-filtered subset) |
 | **Reads** | Network round-trip per query | Local disk |
-| **Writes** | Send EVENT, wait for OK | Append to local Hypercore |
-| **Offline** | No | Yes -- syncs on reconnect |
-| **WoT filtering** | Handled by the relay node | Local via LightStore |
+| **Writes** | Send EVENT, wait for OK (relay must be an admitted writer) | Send EVENT to an admitted relay's WS endpoint (never admitted itself) |
+| **Offline** | No | Reads yes -- syncs on reconnect; writes need a reachable relay |
+| **WoT filtering** | Handled by the relay node | Local via LightStore (pruning disabled this release) |
 | **Dependencies** | WebSocket library | Holepunch stack (Hyperswarm, Corestore, Autobase, Hyperbee) |
-| **Server dependency** | Needs a reachable relay node | None -- any peer works |
+| **Server dependency** | Needs a reachable relay node | Reads: none -- any peer seeds it; writes: an admitted relay |
 | **Trust model** | Trusts the relay | Verifies locally |
-| **Setup** | Connect to a URL | Bootstrap key + local storage |
-| **Best for** | Browsers, lightweight clients | Desktop apps, offline-first, sovereignty |
+| **Setup** | Connect to a URL | Invite (nsw1…) + local storage |
+| **Best for** | Browsers, lightweight clients | Desktop apps, offline-first reading, sovereignty |
