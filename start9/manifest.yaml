@@ -1,11 +1,15 @@
 id: nostr-swarm
 title: "nostr-swarm"
-version: 0.1.0
+version: 0.2.0
 release-notes: |
-  * Initial release
-  * Peer-to-peer Nostr relay over Hyperswarm
-  * Web of Trust filtering
-  * Light client mode
+  * Multi-writer sync: join another relay's shared event store via the new
+    "Bootstrap Key (Invite)" config field, and grant joining nodes write
+    access via "Admit Writers" (saving config restarts the service, which
+    performs the admission)
+  * New copyable properties: "Relay Invite" and "Local Writer Key"
+  * Behavior change: protected events (NIP-70) are now rejected — a
+    replicated relay cannot honor "do not propagate"
+  * Existing installs upgrade with zero action and keep their event store
 license: MIT
 wrapper-repo: "https://github.com/sovITxyz/nostr-swarm"
 upstream-repo: "https://github.com/sovITxyz/nostr-swarm"
@@ -16,10 +20,11 @@ description:
   short: A fully peer-to-peer Nostr relay that syncs events over Hyperswarm.
   long: |
     nostr-swarm is a Nostr relay where every instance is a peer, not a server.
-    Multiple relay nodes join a shared Hyperswarm topic, replicate their data
-    over encrypted P2P connections, and Autobase linearizes all writes into a
-    deterministic view. Every peer ends up with the same events regardless of
-    join order. Includes Web of Trust filtering and light client support.
+    Relay nodes that share one event store (one node founds it; others join
+    with its invite) replicate over encrypted P2P connections, and Autobase
+    linearizes all writes into a deterministic view every peer converges on.
+    Writers are admitted by existing operators; non-writers serve full reads.
+    Includes Web of Trust filtering and light client support.
 
 assets:
   license: LICENSE

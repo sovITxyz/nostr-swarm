@@ -1,8 +1,12 @@
 // Start9 getConfig procedure
 // Returns the config spec (form definition) and current values
 
-export const getConfig = async (effects: any) => {
-	let config: Record<string, unknown> = {}
+interface Effects {
+	readFile(opts: { volumeId: string; path: string }): Promise<string>
+}
+
+export const getConfig = async (effects: Effects) => {
+	const config: Record<string, unknown> = {}
 
 	try {
 		const raw = await effects.readFile({
@@ -13,8 +17,8 @@ export const getConfig = async (effects: any) => {
 		for (const line of raw.split('\n')) {
 			const match = line.match(/^([a-z-]+):\s*(.*)$/)
 			if (match) {
-				const key = match[1]!
-				let value: string | number = match[2]!.replace(/^["']|["']$/g, '')
+				const [, key = '', rawValue = ''] = match
+				let value: string | number = rawValue.replace(/^["']|["']$/g, '')
 				if (/^\d+$/.test(value)) value = Number.parseInt(value, 10)
 				config[key] = value
 			}
@@ -62,6 +66,27 @@ export const getConfig = async (effects: any) => {
 					'Topic name for peer discovery. All relays on the same topic share events. Change this for a private network.',
 				nullable: false,
 				default: config['swarm-topic'] ?? 'nostr',
+			},
+			'bootstrap-key': {
+				type: 'string',
+				name: 'Bootstrap Key (Invite)',
+				description:
+					"Paste another relay's invite (nsw1...) or raw base key (64-character hex) to JOIN its shared event store. Leave empty to FOUND a new store (exactly one node per swarm does this). Set once: after first start the store identity is recorded and cannot be changed without a fresh data volume (use export/import to migrate events).",
+				nullable: true,
+				default: config['bootstrap-key'] ?? '',
+				pattern: '^(nsw1[a-z0-9]+|[0-9a-fA-F]{64})?$',
+				'pattern-description':
+					"Must be an 'nsw1...' invite code, a 64-character hex base key, or empty",
+			},
+			'admit-writers': {
+				type: 'string',
+				name: 'Admit Writers',
+				description:
+					'Comma-separated 64-character hex writer keys to admit to the shared event store. A joining node shows its Local Writer Key in its Properties; paste it here and save — saving restarts the service, which performs the admission. Already-admitted keys are skipped, so it is safe to leave entries in place.',
+				nullable: true,
+				default: config['admit-writers'] ?? '',
+				pattern: '^([0-9a-fA-F]{64}(\\s*,\\s*[0-9a-fA-F]{64})*)?$',
+				'pattern-description': 'Comma-separated 64-character hex writer keys, or empty',
 			},
 			'wot-owner-pubkey': {
 				type: 'string',
