@@ -85,6 +85,17 @@ export async function runExport(
 }
 
 /**
+ * Strip control and escape characters before echoing untrusted strings to the
+ * operator's terminal. An import file is attacker-controlled, and
+ * validateEventStructure only checks `id.length === 64` (not that it is hex),
+ * so a 64-char id could otherwise smuggle ANSI escape sequences to stderr.
+ */
+function safeForTerminal(s: string): string {
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: that is exactly what we are stripping
+	return s.replace(/[\x00-\x1f\x7f-\x9f]/g, '?')
+}
+
+/**
  * Read JSONL events and publish each one as a NIP-01 EVENT over a relay's
  * WebSocket endpoint, awaiting the OK reply before sending the next.
  *
@@ -140,7 +151,9 @@ export async function runImport(
 					continue
 				}
 				result.rejected++
-				process.stderr.write(`import: event ${event.id} rejected: ${reason}\n`)
+				process.stderr.write(
+					`import: event ${safeForTerminal(event.id)} rejected: ${safeForTerminal(reason)}\n`,
+				)
 				break
 			}
 		}
