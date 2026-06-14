@@ -69,6 +69,8 @@ Two nodes only converge on the same data when they share one Autobase. That is e
 
 **In-band admission (optional).** To skip the key-copying step, start an existing writer with `--auto-admit` and the joiner with `--request-writer`. The joiner proves it holds the invite over the swarm (an HMAC over `base.key` bound to the Noise session) and is admitted automatically. Both sides are opt-in and default off, so existing deployments are unchanged. Treat `--auto-admit` as turning the invite into a *write* capability: enable it only when everyone you hand the invite to is trusted to write. Admissions are still capped at 64 writers and rate-limited (16/hour).
 
+**Optimistic writes (optional).** For light/Pear peers that hold only the read invite and never become writers, start the founder with `--accept-optimistic`. Such peers may then append a *self-verifying* event (a fully-signed Nostr event) as an optimistic block; the base re-validates its signature and keeps it durably (via autobase `ackWriter`) **without** admitting the peer as a writer. It is a base-wide consensus policy the founder sets, off by default; like `--auto-admit` it lets invite-holders contribute events, so enable it only when you trust them. This is part of the v2 consensus rules (`CONSENSUS_VERSION = 2`) — a breaking change, so every node on a base must run a v2 build.
+
 Safety properties:
 
 - The invite is checksummed: a typo'd `--bootstrap` is a hard startup error, never a silently re-founded empty node.
@@ -92,6 +94,8 @@ To merge two relays that were *both* founded independently (each owning its own 
                             swarm instead of waiting for an operator --admit
     --auto-admit            Granter: honor in-band admission requests proven
                             by invite possession (opt-in; off by default)
+    --accept-optimistic     Founder: accept self-verifying optimistic writes
+                            from non-admitted invite-holders (opt-in; off)
     --relay-name <name>     Relay name for NIP-11
     --relay-contact <addr>  Admin contact for NIP-11
     --wot-pubkey <hex>      Owner pubkey for Web of Trust filtering
@@ -120,6 +124,7 @@ All config can also be set via environment variables. Note: environment variable
 | `ADMIT_WRITERS` | Comma-separated 64-hex writer keys to admit | (empty) |
 | `REQUEST_WRITER` | Joiner: request writer admission in-band (`1`/`true`) | `false` |
 | `AUTO_ADMIT` | Granter: honor in-band admission requests (`1`/`true`) | `false` |
+| `ACCEPT_OPTIMISTIC` | Founder: accept self-verifying optimistic writes from non-admitted peers (`1`/`true`) | `false` |
 | `RELAY_NAME` | Relay name (NIP-11) | `nostr-swarm` |
 | `RELAY_DESCRIPTION` | Relay description (NIP-11) | |
 | `RELAY_CONTACT` | Admin contact (NIP-11) | |
@@ -136,10 +141,10 @@ All config can also be set via environment variables. Note: environment variable
 | `WOT_DISCOVERY_TTL` | TTL for discovery events (seconds) | `7200` |
 | `WOT_DISCOVERY_MAX_EVENTS` | Max events per unknown pubkey | `5` |
 | `LIGHT_CLIENT` | Enable light client mode | `false` |
-| `LIGHT_MAX_STORAGE` | Max storage target (bytes) -- **not enforced this release**, logs a warning | `524288000` |
-| `LIGHT_PRUNE_MS` | Pruning interval (ms) -- pruning is currently a warn-once no-op | `600000` |
+| `LIGHT_MAX_STORAGE` | Max storage target (bytes); enforced on a writable (founder) light client | `524288000` |
+| `LIGHT_PRUNE_MS` | Pruning interval (ms) | `600000` |
 
-Note: light-client TTL pruning is disabled this release. It used to append forged, unsigned deletion ops, which the consensus `apply()` now (correctly) drops -- and in a shared multi-writer base they would otherwise act as global deletions. True local pruning is deferred; until then `LIGHT_MAX_STORAGE` degrades to a warning.
+Note: light-client pruning enforces `LIGHT_MAX_STORAGE` by evicting the oldest events (profiles/contact/mute lists exempt) via founder-authored `prune_delete` consensus ops, so the view stays convergent. It therefore only runs on a **writable (founder/personal-relay) base** — a read-only replica cannot soundly mutate the shared, autobase-materialized view, so there it stays a no-op and storage is bounded only by WoT ingest filtering.
 
 ## Deployment
 

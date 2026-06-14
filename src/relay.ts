@@ -10,6 +10,9 @@ import { WotGraph } from './wot/graph.js'
 import { ReplicationPolicyEngine } from './wot/policy.js'
 import { RelayServer } from './ws/server.js'
 
+/** Max expired events reclaimed per cleanup cycle (bounds oplog write amplification) */
+const EXPIRY_DELETE_BATCH = 256
+
 export class NostrSwarm {
 	readonly config: RelayConfig
 	readonly wotConfig: WotConfig
@@ -87,6 +90,13 @@ export class NostrSwarm {
 			}
 		}
 
+		// Reconcile the base-wide optimistic-write policy to match this founder's
+		// --accept-optimistic flag. Only the founder may set it (set_config is
+		// founder-authored), and it is the authoritative source on each restart.
+		if (this.store.isFounder) {
+			await this.reconcileOptimisticPolicy()
+		}
+
 		// Build WoT graph if configured (and not in light mode, which does its own)
 		if (this.wot && !this.lightStore) {
 			await this.wot.rebuild(() => this.store.indexes)
@@ -137,6 +147,25 @@ export class NostrSwarm {
 		logger.info('nostr-swarm stopped')
 	}
 
+	/**
+	 * Bring the base's `accept_optimistic` consensus flag in line with this
+	 * founder's --accept-optimistic config (writes a set_config op only when it
+	 * actually differs, so restarts are a no-op when unchanged).
+	 */
+	private async reconcileOptimisticPolicy(): Promise<void> {
+		try {
+			const current = await this.store.getConfig('accept_optimistic')
+			if (current !== this.config.acceptOptimistic) {
+				await this.store.setConfig('accept_optimistic', this.config.acceptOptimistic)
+				logger.info('Set optimistic-write policy', {
+					acceptOptimistic: this.config.acceptOptimistic,
+				})
+			}
+		} catch (err) {
+			logger.error('Failed to set optimistic-write policy', { error: String(err) })
+		}
+	}
+
 	/** Append add_writer ops for each configured --admit key (already-admitted keys are skipped) */
 	private async processAdmissions(): Promise<void> {
 		for (const key of this.config.admitWriters) {
@@ -149,10 +178,23 @@ export class NostrSwarm {
 		}
 	}
 
-	/** Periodic cleanup of expired events (NIP-40) */
+	/**
+	 * Periodic NIP-40 cleanup. Expired events are always filtered at query time;
+	 * this additionally reclaims their storage via consensus expiry_delete ops so
+	 * every peer converges. Only the founder issues them (it is the sole indexer,
+	 * which avoids duplicate ops from multiple writers); other nodes just
+	 * replicate the result. Bounded per cycle to cap oplog write amplification.
+	 */
 	private async cleanupExpired(): Promise<void> {
-		// This would scan the expiration index and remove expired events.
-		// For v1, expired events are filtered at query time in the handler.
-		// Full cleanup can be added in a future version.
+		if (!this.store.isFounder || !this.store.writable) return
+		const now = Math.floor(Date.now() / 1000)
+		try {
+			const ids = await this.store.listExpired(now, EXPIRY_DELETE_BATCH)
+			if (ids.length === 0) return
+			await this.store.expireEvents(ids)
+			logger.info('Reclaimed expired events', { count: ids.length })
+		} catch (err) {
+			logger.error('Expiration cleanup failed', { error: String(err) })
+		}
 	}
 }

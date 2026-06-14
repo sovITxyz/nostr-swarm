@@ -65,6 +65,7 @@ const { values } = parseArgs({
 		admit: { type: 'string', multiple: true },
 		'request-writer': { type: 'boolean' },
 		'auto-admit': { type: 'boolean' },
+		'accept-optimistic': { type: 'boolean' },
 		'relay-name': { type: 'string' },
 		'relay-contact': { type: 'string' },
 		'wot-pubkey': { type: 'string' },
@@ -113,6 +114,13 @@ Options:
                               turns the invite into a write capability, so only
                               enable it on a base whose invite you treat as a
                               shared writer secret. Off by default.
+      --accept-optimistic     Founder only: accept self-verifying optimistic
+                              writes from non-admitted invite-holders (e.g.
+                              light/Pear peers) without admitting them as
+                              writers. Base-wide consensus policy; off by
+                              default. Like --auto-admit it lets invite-holders
+                              contribute events, so enable it only when you
+                              trust them.
       --relay-name <name>     Relay name for NIP-11
       --relay-contact <addr>  Admin contact for NIP-11
       --wot-pubkey <hex>      Owner pubkey for Web of Trust filtering
@@ -157,6 +165,7 @@ Environment variables:
   ADMIT_WRITERS (comma-separated 64-hex writer keys; same as --admit),
   REQUEST_WRITER (1/true; same as --request-writer),
   AUTO_ADMIT (1/true; same as --auto-admit),
+  ACCEPT_OPTIMISTIC (1/true; same as --accept-optimistic),
   RELAY_NAME, RELAY_DESCRIPTION, RELAY_CONTACT, RELAY_PUBKEY,
   MAX_MESSAGE_SIZE, MAX_SUBS, MAX_FILTERS,
   EVENT_RATE, REQ_RATE,
@@ -182,6 +191,7 @@ if (values.bootstrap) relayOverrides.bootstrap = values.bootstrap
 if (values.admit && values.admit.length > 0) relayOverrides.admitWriters = values.admit
 if (values['request-writer']) relayOverrides.requestWriter = true
 if (values['auto-admit']) relayOverrides.autoAdmit = true
+if (values['accept-optimistic']) relayOverrides.acceptOptimistic = true
 if (values['relay-name']) relayOverrides.relayName = values['relay-name']
 if (values['relay-contact']) relayOverrides.relayContact = values['relay-contact']
 

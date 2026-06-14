@@ -133,13 +133,15 @@ describe('multi-node convergence (local testnet)', { timeout: 60_000 }, () => {
 	})
 
 	it('a read-only peer cannot halt the founder with an optimistic future-version op', async () => {
-		// Same vector, DoS variant: a `v` above CONSENSUS_VERSION would trip
+		// Same vector, DoS variant: a `v` above CONSENSUS_VERSION (2) would trip
 		// host.interrupt (a permanent, swarm-wide linearization halt) if apply
-		// acted on optimistic input. Skipping optimistic nodes closes it.
+		// acted on optimistic input. Optimistic blocks are never version-checked
+		// (they are skipped or, in v2, only accepted as self-verifying puts), so
+		// a future-version optimistic op cannot halt the founder.
 		expect(joiner.store.writable).toBe(false)
 		const { event } = createSignedEvent({ content: 'future version', sk: authorSk })
 		await joiner.store.base.append(
-			{ type: 'put', event, v: 2 } as unknown as Record<string, unknown>,
+			{ type: 'put', event, v: 3 } as unknown as Record<string, unknown>,
 			{ optimistic: true },
 		)
 		await new Promise((r) => setTimeout(r, 4000))

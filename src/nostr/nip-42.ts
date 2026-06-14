@@ -8,10 +8,7 @@ export interface AuthResult {
 }
 
 /** Validate a NIP-42 AUTH response event */
-export function validateAuth(
-	event: NostrEvent,
-	expectedChallenge: string,
-): AuthResult {
+export function validateAuth(event: NostrEvent, expectedChallenge: string): AuthResult {
 	// Must be kind 22242
 	if (event.kind !== 22242) {
 		return { ok: false, message: 'invalid: auth event must be kind 22242' }

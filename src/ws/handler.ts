@@ -134,8 +134,16 @@ export class MessageHandler {
 		}
 
 		// Read-only gate: a joiner serves full reads from the replicated view,
-		// but cannot append ops until an existing writer's operator admits it.
+		// but cannot append durable ops until an existing writer's operator admits
+		// it. If the base opted into in-band optimistic writes, forward this
+		// self-verifying event as an optimistic block instead of rejecting
+		// (kind-5 deletes are author-scoped consensus ops, not supported here).
 		if (!this.store.writable) {
+			if (event.kind !== 5 && (await this.store.acceptsOptimistic())) {
+				await this.store.putEvent(event)
+				conn.sendOk(event.id, true, '')
+				return
+			}
 			conn.sendOk(event.id, false, 'blocked: read-only replica awaiting writer admission')
 			return
 		}

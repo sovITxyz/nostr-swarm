@@ -138,7 +138,7 @@ The `ttlByDegree` map sets how long events from each tier are considered fresh (
 - `0` means no expiry
 - Any positive number is the max age before the tier's events are policy-expired (`isExpiredByPolicy`)
 
-Note: TTL-based *pruning* (physically removing expired-tier events) is disabled this release -- see "Full relay vs. light client" below.
+Note: light clients additionally enforce a storage budget by *pruning* the oldest events on a writable (founder) base -- see "Full relay vs. light client" below.
 
 ### Kind 0, Kind 3, and Kind 10000 exemption
 
@@ -190,4 +190,4 @@ Takes a `WotGraph` and a `WotConfig`, evaluates events:
 ## Full relay vs. light client
 
 - **Full relay** (Start9, VPS): WoT is optional. When enabled, it filters incoming events but the relay still serves everything it has stored. Useful for spam prevention.
-- **Light client** (phone, Pear Runtime): WoT filtering at write time. TTL pruning is **disabled this release** -- `LightStore.prune()` is a warn-once no-op and `LIGHT_MAX_STORAGE` is not enforced. The old pruning path appended forged, unsigned kind-5 deletion ops; the consensus apply now drops unsigned deletions, and in a shared multi-writer base they would otherwise have acted as global deletions on every peer. True local pruning (hypercore clearing) is deferred. See [Client Architecture](clients.md) for details.
+- **Light client** (phone, Pear Runtime): WoT filtering at write time, plus storage-budget pruning (v2). `LightStore.prune()` enforces `LIGHT_MAX_STORAGE` by evicting the oldest events (profiles/contact/mute lists exempt) via founder-authored `prune_delete` consensus ops, so the view stays convergent (the old forged-kind-5 path is gone). It only acts on a writable (founder/personal-relay) base; a read-only replica cannot soundly mutate the shared, autobase-materialized view, so there pruning is a no-op. See [Client Architecture](clients.md) for details.

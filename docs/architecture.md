@@ -84,7 +84,7 @@ this.base = new Autobase(this.corestore, bootstrap, {
   apply: this.apply.bind(this),
   valueEncoding: 'json',
   ackInterval: 1000,  // ack every second to advance the view
-  optimistic: true,   // reserved for v2 (constructor-gated; see below)
+  optimistic: true,   // enables self-verifying optimistic writes (v2; see below)
 })
 ```
 
@@ -92,7 +92,7 @@ this.base = new Autobase(this.corestore, bootstrap, {
 - **apply** -- The deterministic function that processes linearized operations and writes to the view (see "The apply function" below -- it is a versioned consensus protocol).
 - **ackInterval** -- How often the indexer acknowledges it has seen the latest state. Acks are themselves operations that advance the linearization.
 - **bootstrap** -- The key of the founder's Autobase, resolved by `resolveBootstrap` from the configured invite or the `<storage>/bootstrap-key` file. `null` means this node founds a new base.
-- **optimistic** -- Reserved now because it cannot be retrofitted without a consensus bump. v1's apply never acks optimistic blocks, so they are always rolled back; the option exists so v2 can add self-verifying optimistic writes from light/Pear peers.
+- **optimistic** -- Enables the v2 self-verifying-write path. A non-admitted peer (read invite only) may append a single optimistic block; `apply` accepts it only if it is a signature-valid `put`, the base's `accept_optimistic` consensus flag is set (founder `--accept-optimistic`), and it passes the normal put rules — then it is made durable via `host.ackWriter` **without** admitting the peer as a writer. With the flag off, optimistic blocks are rolled back, as in v1. It is constructor-gated because it cannot be retrofitted without a consensus bump.
 
 ### Hyperbee
 
@@ -332,8 +332,8 @@ HTTP GET with `Accept: application/nostr+json` returns a JSON document with rela
 
 Events with an `expiration` tag are:
 - Rejected on ingestion if already expired
-- Indexed in the expiration sub-db for future cleanup
-- Filtered at query time (v1 approach; periodic cleanup is stubbed for a future version)
+- Indexed in the expiration sub-db (keyed by expiry ascending) and filtered at query time
+- Reclaimed from storage by a periodic founder job (v2): it range-scans the expiration sub for passed expiries and appends founder-authored `expiry_delete` consensus ops, so every peer converges. apply has no wall-clock, so the "is it expired" judgment is the founder's; apply only honors a present op and only for events that actually declared an expiration (so it cannot censor).
 
 ### NIP-42: Authentication
 
@@ -436,7 +436,7 @@ nostr-swarm includes an optional Web of Trust (WoT) module that filters events b
 WoT is enabled by setting `WOT_OWNER_PUBKEY`. It works in two modes:
 
 - **Full relay mode** (default): WoT filters incoming events but the relay keeps everything it has already stored. Useful for spam prevention on always-on nodes.
-- **Light client mode** (`LIGHT_CLIENT=true`): WoT filtering at write time. TTL-based pruning is disabled this release (warn-once no-op): it used to append forged unsigned kind-5 ops, which the consensus apply drops -- and in a shared base they would otherwise act as global deletions. See [Client Architecture](clients.md) for details.
+- **Light client mode** (`LIGHT_CLIENT=true`): WoT filtering at write time, plus storage-budget pruning (v2). When the base is writable (a founder/personal relay), `LightStore.prune` evicts the oldest events (profiles/contact/mute lists exempt) over `LIGHT_MAX_STORAGE` via founder-authored `prune_delete` consensus ops, keeping the view convergent. On a read-only replica it stays a no-op (the shared, autobase-materialized view cannot be soundly mutated locally). See [Client Architecture](clients.md) for details.
 
 WoT is strictly a **local pre-append / serve-time policy** -- it is never part of the apply()/consensus rules, because per-node trust graphs would diverge views. See [Web of Trust](web-of-trust.md).
 
@@ -472,8 +472,8 @@ Note the foot-gun: env beats CLI for every knob, including `BOOTSTRAP_KEY` over 
 | WoT max depth | `WOT_MAX_DEPTH` | `--wot-depth` | 3 |
 | WoT refresh interval | `WOT_REFRESH_MS` | -- | 300000 (5 min) |
 | Light client mode | `LIGHT_CLIENT` | `--light-client` | false |
-| Light max storage (not enforced this release) | `LIGHT_MAX_STORAGE` | -- | 524288000 (500 MB) |
-| Light prune interval (pruning is a warn-once no-op) | `LIGHT_PRUNE_MS` | -- | 600000 (10 min) |
+| Light max storage (enforced on a writable/founder light client) | `LIGHT_MAX_STORAGE` | -- | 524288000 (500 MB) |
+| Light prune interval | `LIGHT_PRUNE_MS` | -- | 600000 (10 min) |
 
 ## File map
 

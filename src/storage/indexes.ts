@@ -13,6 +13,7 @@ export const SUB_NAMES = {
 	expiration: 'expiration',
 	deletion: 'deletion',
 	writers: 'writers',
+	config: 'config',
 } as const
 
 export interface IndexSubs {
@@ -31,6 +32,12 @@ export interface IndexSubs {
 	 * The founder's own writer key is implicit and never recorded here.
 	 */
 	writers: Hyperbee
+	/**
+	 * Base-wide consensus config: key = flag name, value = boolean. Written only
+	 * by founder-authored set_config ops; read by apply() to gate behavior
+	 * deterministically (e.g. 'accept_optimistic').
+	 */
+	config: Hyperbee
 }
 
 /** Create all sub-databases from a root Hyperbee */
@@ -48,5 +55,6 @@ export function createSubs(db: Hyperbee): IndexSubs {
 		expiration: db.sub(SUB_NAMES.expiration, opts),
 		deletion: db.sub(SUB_NAMES.deletion, opts),
 		writers: db.sub(SUB_NAMES.writers, opts),
+		config: db.sub(SUB_NAMES.config, opts),
 	}
 }

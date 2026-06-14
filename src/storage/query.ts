@@ -1,15 +1,5 @@
 import { matchFilter } from '../nostr/filters.js'
-import {
-	authorKindKey,
-	authorKey,
-	createdAtKey,
-	encodeKind,
-	eventKey,
-	invertTimestamp,
-	kindKey,
-	prefixRange,
-	tagKey,
-} from '../util/keys.js'
+import { encodeKind, eventKey, invertTimestamp } from '../util/keys.js'
 import type { NostrEvent, NostrFilter } from '../util/types.js'
 import type { IndexSubs } from './indexes.js'
 
@@ -101,10 +91,7 @@ export async function queryFilter(
 }
 
 /** Execute multiple filters (OR logic) and deduplicate */
-export async function queryFilters(
-	subs: IndexSubs,
-	filters: NostrFilter[],
-): Promise<NostrEvent[]> {
+export async function queryFilters(subs: IndexSubs, filters: NostrFilter[]): Promise<NostrEvent[]> {
 	const allEvents: NostrEvent[] = []
 	const seen = new Set<string>()
 
@@ -128,10 +115,7 @@ export async function queryFilters(
 }
 
 /** Count matching events for multiple filters */
-export async function countFilters(
-	subs: IndexSubs,
-	filters: NostrFilter[],
-): Promise<number> {
+export async function countFilters(subs: IndexSubs, filters: NostrFilter[]): Promise<number> {
 	const seen = new Set<string>()
 	let count = 0
 

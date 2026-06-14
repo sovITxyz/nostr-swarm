@@ -9,6 +9,7 @@ const defaults: RelayConfig = {
 	admitWriters: [],
 	requestWriter: false,
 	autoAdmit: false,
+	acceptOptimistic: false,
 	relayName: 'nostr-swarm',
 	relayDescription: 'A peer-to-peer Nostr relay over Hyperswarm',
 	relayContact: '',
@@ -74,6 +75,10 @@ export function loadConfig(overrides?: Partial<RelayConfig>): RelayConfig {
 		admitWriters: envList('ADMIT_WRITERS', overrides?.admitWriters ?? defaults.admitWriters),
 		requestWriter: envBool('REQUEST_WRITER', overrides?.requestWriter ?? defaults.requestWriter),
 		autoAdmit: envBool('AUTO_ADMIT', overrides?.autoAdmit ?? defaults.autoAdmit),
+		acceptOptimistic: envBool(
+			'ACCEPT_OPTIMISTIC',
+			overrides?.acceptOptimistic ?? defaults.acceptOptimistic,
+		),
 		relayName: envStr('RELAY_NAME', overrides?.relayName ?? defaults.relayName),
 		relayDescription: envStr(
 			'RELAY_DESCRIPTION',

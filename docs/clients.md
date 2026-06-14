@@ -269,7 +269,7 @@ This is the recommended approach for phone clients. The light store:
 - Filters events at write time (rejects untrusted pubkeys)
 - Always accepts kind 3 and kind 10000 events (needed for the WoT graph itself)
 
-**TTL pruning is disabled this release** (`prune()` is a warn-once no-op, and `maxStorageBytes` is not enforced). The old pruning path appended forged, unsigned kind-5 ops; the consensus apply now drops unsigned deletions, and in a shared multi-writer base they would otherwise have acted as *global* deletions on every peer. True local pruning (hypercore clearing) is deferred to a future release.
+**Storage-budget pruning (v2)** enforces `maxStorageBytes` by evicting the oldest events (profiles/contact/mute lists exempt) via founder-authored `prune_delete` consensus ops, so the view stays convergent rather than diverging per peer. The old path that appended forged, unsigned kind-5 ops is gone (consensus apply drops unsigned deletions, and in a shared base they would have acted as *global* deletions). Because the eviction is a consensus op, `prune()` only acts on a **writable (founder/personal-relay) base**; on a read-only replica it is a no-op (the shared, autobase-materialized view cannot be soundly mutated locally), so there storage is bounded only by WoT ingest filtering.
 
 Note that WoT filtering is **local policy only** -- it decides what this node appends and serves, never what the shared base accepts. See [Web of Trust](web-of-trust.md).
 
@@ -327,7 +327,7 @@ The v2 in-band admission channel (`nostr-swarm/admission@1` over protomux, contr
 | **Reads** | Network round-trip per query | Local disk |
 | **Writes** | Send EVENT, wait for OK (relay must be an admitted writer) | Send EVENT to an admitted relay's WS endpoint (never admitted itself) |
 | **Offline** | No | Reads yes -- syncs on reconnect; writes need a reachable relay |
-| **WoT filtering** | Handled by the relay node | Local via LightStore (pruning disabled this release) |
+| **WoT filtering** | Handled by the relay node | Local via LightStore (storage-budget pruning on a writable/founder base) |
 | **Dependencies** | WebSocket library | Holepunch stack (Hyperswarm, Corestore, Autobase, Hyperbee) |
 | **Server dependency** | Needs a reachable relay node | Reads: none -- any peer seeds it; writes: an admitted relay |
 | **Trust model** | Trusts the relay | Verifies locally |
