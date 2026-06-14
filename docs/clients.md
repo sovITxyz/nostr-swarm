@@ -313,9 +313,9 @@ The founder logs its invite at startup and writes it to `<storage>/keys.json` (S
 
 On relays, `<storage>/bootstrap-key` pins the storage directory to its base after first start -- reconfiguring a different bootstrap is a fatal error (the re-founding guard in `src/storage/bootstrap.ts`).
 
-### Future: in-band admission (v2)
+### In-band admission (v2)
 
-`src/swarm/protocol.ts` carries the complete contract for a v2 in-band admission channel (`nostr-swarm/admission@1` over protomux): a joiner proves possession of the invite with an HMAC bound to the Noise session and requests admission in-band, removing the restart-to-admit step. It is specified but not implemented in this release; admission today is the operator-driven `--admit` flow.
+The v2 in-band admission channel (`nostr-swarm/admission@1` over protomux, contract in `src/swarm/protocol.ts`, implementation in `src/swarm/admission.ts`) is implemented: a joiner started with `--request-writer` proves possession of the invite with an HMAC bound to the Noise session and requests admission in-band, and a writer started with `--auto-admit` grants it — removing the restart-to-admit step. Both sides are opt-in and default off, so the baseline flow remains the operator-driven `--admit`. Because `--auto-admit` makes the invite a write capability, enable it only when invite holders are trusted to write; admissions stay bounded by the 64-writer cap and a 16/hour rate limit.
 
 ## Comparison
 

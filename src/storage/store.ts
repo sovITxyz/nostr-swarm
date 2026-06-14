@@ -186,6 +186,18 @@ export class EventStore extends EventEmitter {
 		return 'appended'
 	}
 
+	/**
+	 * Whether `keyHex` is already an admitted writer. The founder's own writer
+	 * key (the base key) is implicit and counts as admitted. Used by the v2
+	 * admission granter to dedup before spending a rate-limit token.
+	 */
+	async isAdmittedWriter(keyHex: string): Promise<boolean> {
+		const key = keyHex.toLowerCase()
+		if (!WRITER_KEY_RE.test(key)) return false
+		if (this.base.key && key === this.base.key.toString('hex')) return true
+		return (await this.indexes.writers.get(key)) !== null
+	}
+
 	/** All admitted writer keys (64-hex), excluding the implicit founder */
 	async listWriters(): Promise<string[]> {
 		const keys: string[] = []

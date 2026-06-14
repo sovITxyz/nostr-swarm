@@ -67,6 +67,8 @@ Two nodes only converge on the same data when they share one Autobase. That is e
 2. **Join** -- every other node starts *with* `--bootstrap <invite>` (or the raw 64-hex base key). A joiner replicates and serves reads immediately, but stays **read-only** -- `EVENT` gets `["OK", id, false, "blocked: read-only replica awaiting writer admission"]` -- until admitted. Each joiner logs its own writer key at startup.
 3. **Admit** -- send the joiner's writer key (out-of-band) to the operator of any existing writer, who restarts with `--admit <writerKeyHex>`. Once the admission replicates, the joiner becomes writable automatically -- no restart on its side.
 
+**In-band admission (optional).** To skip the key-copying step, start an existing writer with `--auto-admit` and the joiner with `--request-writer`. The joiner proves it holds the invite over the swarm (an HMAC over `base.key` bound to the Noise session) and is admitted automatically. Both sides are opt-in and default off, so existing deployments are unchanged. Treat `--auto-admit` as turning the invite into a *write* capability: enable it only when everyone you hand the invite to is trusted to write. Admissions are still capped at 64 writers and rate-limited (16/hour).
+
 Safety properties:
 
 - The invite is checksummed: a typo'd `--bootstrap` is a hard startup error, never a silently re-founded empty node.
@@ -86,6 +88,10 @@ To merge two relays that were *both* founded independently (each owning its own 
                             or a raw 64-hex base key (omit to found a new base)
     --admit <hex64>         Writer key to admit (repeatable); run on any
                             existing writer to grant write access
+    --request-writer        Joiner: request writer admission in-band over the
+                            swarm instead of waiting for an operator --admit
+    --auto-admit            Granter: honor in-band admission requests proven
+                            by invite possession (opt-in; off by default)
     --relay-name <name>     Relay name for NIP-11
     --relay-contact <addr>  Admin contact for NIP-11
     --wot-pubkey <hex>      Owner pubkey for Web of Trust filtering
@@ -112,6 +118,8 @@ All config can also be set via environment variables. Note: environment variable
 | `SWARM_TOPIC` | Swarm topic name | `nostr` |
 | `BOOTSTRAP_KEY` | `nsw1…` invite or 64-hex base key to join (empty = found) | (empty) |
 | `ADMIT_WRITERS` | Comma-separated 64-hex writer keys to admit | (empty) |
+| `REQUEST_WRITER` | Joiner: request writer admission in-band (`1`/`true`) | `false` |
+| `AUTO_ADMIT` | Granter: honor in-band admission requests (`1`/`true`) | `false` |
 | `RELAY_NAME` | Relay name (NIP-11) | `nostr-swarm` |
 | `RELAY_DESCRIPTION` | Relay description (NIP-11) | |
 | `RELAY_CONTACT` | Admin contact (NIP-11) | |
@@ -266,7 +274,7 @@ swarm.join(topic, { server: true, client: true })
 // To publish, send EVENT to any admitted relay's WebSocket endpoint.
 ```
 
-The invite is shared operator-to-operator: it is checksummed (a typo fails loudly instead of silently founding an empty base) and the raw 64-hex base key is also accepted for scripting. Light/Pear clients are never admitted as writers in this release -- appending directly to the base would be rolled back as un-admitted. A future release adds an in-band admission channel (the contract is fully specified in `src/swarm/protocol.ts`).
+The invite is shared operator-to-operator: it is checksummed (a typo fails loudly instead of silently founding an empty base) and the raw 64-hex base key is also accepted for scripting. Light/Pear clients are never admitted as writers in this release -- appending directly to the base would be rolled back as un-admitted. Operators who would rather skip the manual key copy can opt into the in-band admission channel (`--auto-admit` on a writer, `--request-writer` on the joiner; contract in `src/swarm/protocol.ts`, implementation in `src/swarm/admission.ts`).
 
 ## Architecture
 

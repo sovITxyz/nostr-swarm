@@ -140,6 +140,13 @@ declare module 'hyperswarm' {
 	/** Encrypted Noise connection socket handed to 'connection' listeners */
 	export interface SwarmSocket {
 		remotePublicKey: Buffer
+		/**
+		 * The Noise handshake transcript hash (from @hyperswarm/secret-stream),
+		 * identical on both peers and unique per connection; null until the
+		 * handshake completes (it is populated by the time 'connection' fires).
+		 * Bound into the v2 admission proof to make it replay-proof.
+		 */
+		handshakeHash: Buffer | null
 		on(event: 'close', listener: () => void): SwarmSocket
 		on(event: 'error', listener: (err: Error) => void): SwarmSocket
 		write(data: Buffer | string): boolean
@@ -188,6 +195,75 @@ declare module 'hyperdht/testnet.js' {
 declare module 'graceful-goodbye' {
 	function goodbye(fn: () => Promise<void> | void, priority?: number): void
 	export default goodbye
+}
+
+declare module 'protomux' {
+	/** A registered message type on a channel (protomux index.js Message) */
+	interface ProtomuxMessage<T = any> {
+		send(data: T): boolean
+		encoding: any
+		onmessage: (message: T) => void
+	}
+
+	/** A protocol channel multiplexed over the shared stream */
+	interface ProtomuxChannel {
+		addMessage<T = any>(opts: {
+			encoding?: any
+			onmessage?: (message: T) => void
+		}): ProtomuxMessage<T>
+		open(handshake?: any): void
+		close(): void
+		cork(): void
+		uncork(): void
+		readonly closed: boolean
+	}
+
+	class Protomux {
+		constructor(stream: any, opts?: any)
+		/** Accept either an existing muxer or a stream (creating/returning its muxer) */
+		static from(stream: any, opts?: any): Protomux
+		/** Returns null for a duplicate (unique) channel or one the remote already closed */
+		createChannel(opts: {
+			protocol: string
+			id?: Buffer | null
+			unique?: boolean
+			handshake?: any
+			messages?: any[]
+			userData?: any
+			onopen?: (handshake?: any) => void
+			onclose?: () => void
+			ondestroy?: () => void
+			ondrain?: () => void
+		}): ProtomuxChannel | null
+		opened(opts: { protocol: string; id?: Buffer | null }): boolean
+	}
+
+	export default Protomux
+}
+
+declare module 'compact-encoding' {
+	export interface Encoding<T = any> {
+		preencode(state: any, value: T): void
+		encode(state: any, value: T): void
+		decode(state: any): T
+	}
+	export const json: Encoding
+	export const string: Encoding<string>
+	export const raw: Encoding<Buffer>
+	export const buffer: Encoding<Buffer>
+	export const bool: Encoding<boolean>
+	export function encode<T>(enc: Encoding<T>, value: T): Buffer
+	export function decode<T>(enc: Encoding<T>, buffer: Buffer): T
+	const c: {
+		json: Encoding
+		string: Encoding<string>
+		raw: Encoding<Buffer>
+		buffer: Encoding<Buffer>
+		bool: Encoding<boolean>
+		encode: typeof encode
+		decode: typeof decode
+	}
+	export default c
 }
 
 declare module 'b4a' {
