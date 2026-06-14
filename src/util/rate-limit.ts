@@ -22,6 +22,15 @@ export class TokenBucket {
 		return false
 	}
 
+	/**
+	 * Return one previously-consumed token (capped at capacity). Lets a caller
+	 * "uncharge" a consume() whose guarded action turned out to be a no-op.
+	 */
+	refund(): void {
+		this.refill()
+		this.tokens = Math.min(this.capacity, this.tokens + 1)
+	}
+
 	private refill(): void {
 		const now = Date.now()
 		const elapsed = (now - this.lastRefill) / 1000

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import Hyperswarm, { type PeerInfo, type SwarmSocket } from 'hyperswarm'
 import type { EventStore } from '../storage/store.js'
 import { logger } from '../util/logger.js'
+import { type AdmissionOptions, AdmissionService } from './admission.js'
 
 export interface SwarmNetworkOptions {
 	/**
@@ -16,9 +17,15 @@ export class SwarmNetwork {
 	private readonly swarm: Hyperswarm
 	private readonly store: EventStore
 	private readonly topicBuffer: Buffer
+	private readonly admission: AdmissionService
 	private peerCount = 0
 
-	constructor(store: EventStore, topic: string, opts?: SwarmNetworkOptions) {
+	constructor(
+		store: EventStore,
+		topic: string,
+		opts?: SwarmNetworkOptions,
+		admission?: AdmissionOptions,
+	) {
 		// Bootstrap-array form only — never inject a shared DHT node via opts.dht,
 		// because Hyperswarm.destroy() force-destroys injected DHT instances.
 		this.swarm = opts?.dhtBootstrap
@@ -26,6 +33,10 @@ export class SwarmNetwork {
 			: new Hyperswarm()
 		this.store = store
 		this.topicBuffer = createHash('sha256').update(`nostr-swarm:${topic}`).digest()
+		this.admission = new AdmissionService(
+			store,
+			admission ?? { requestWriter: false, autoAdmit: false },
+		)
 	}
 
 	async start(): Promise<void> {
@@ -38,6 +49,11 @@ export class SwarmNetwork {
 			// protomux-wakeup protocol announces writer heads to this peer.
 			// relay.ts ordering guarantees the base is ready before connections.
 			this.store.base.replicate(socket)
+
+			// Open the v2 admission channel on the same muxer (no-op unless this
+			// node opted into requesting or granting in-band admission). Must run
+			// after replicate() so Protomux.from reuses Autobase's muxer.
+			this.admission.attach(socket)
 
 			socket.on('close', () => {
 				this.peerCount--

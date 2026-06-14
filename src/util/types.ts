@@ -63,6 +63,10 @@ export interface RelayConfig {
 	bootstrap: string
 	/** Writer keys (64-hex) to admit once this node's base is writable */
 	admitWriters: string[]
+	/** Joiner: request writer admission in-band (proof of invite possession) instead of waiting for --admit */
+	requestWriter: boolean
+	/** Granter: auto-admit invite-proving joiners over the in-band channel (opt-in; default keeps invite read-only) */
+	autoAdmit: boolean
 	relayName: string
 	relayDescription: string
 	relayContact: string

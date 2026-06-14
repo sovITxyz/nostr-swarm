@@ -39,7 +39,10 @@ export class NostrSwarm {
 		const bootstrap = resolveBootstrap(this.config.storagePath, this.config.bootstrap)
 		this.store = new EventStore(this.config.storagePath, bootstrap)
 		this.server = new RelayServer(this.store, this.config)
-		this.network = new SwarmNetwork(this.store, this.config.topic, configOverrides?.network)
+		this.network = new SwarmNetwork(this.store, this.config.topic, configOverrides?.network, {
+			requestWriter: this.config.requestWriter,
+			autoAdmit: this.config.autoAdmit,
+		})
 
 		// Initialize WoT if owner pubkey is configured
 		if (this.wotConfig.ownerPubkey) {

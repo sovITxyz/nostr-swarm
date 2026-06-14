@@ -63,6 +63,8 @@ const { values } = parseArgs({
 		topic: { type: 'string', short: 't' },
 		bootstrap: { type: 'string' },
 		admit: { type: 'string', multiple: true },
+		'request-writer': { type: 'boolean' },
+		'auto-admit': { type: 'boolean' },
 		'relay-name': { type: 'string' },
 		'relay-contact': { type: 'string' },
 		'wot-pubkey': { type: 'string' },
@@ -102,6 +104,15 @@ Options:
                               Omit to found a new base.
       --admit <hex64>         Writer key to admit (repeatable). Run on any
                               existing writer to grant write access.
+      --request-writer        Joiner: request writer admission in-band over the
+                              swarm (proves invite possession), instead of
+                              waiting for an operator --admit. No effect once
+                              already writable.
+      --auto-admit            Granter: honor in-band admission requests from
+                              peers that prove they hold the invite. OPT-IN: it
+                              turns the invite into a write capability, so only
+                              enable it on a base whose invite you treat as a
+                              shared writer secret. Off by default.
       --relay-name <name>     Relay name for NIP-11
       --relay-contact <addr>  Admin contact for NIP-11
       --wot-pubkey <hex>      Owner pubkey for Web of Trust filtering
@@ -123,6 +134,12 @@ Multi-writer workflow (founder/joiner):
      writer, who restarts with --admit <writerKeyHex>. The joiner becomes
      writable as soon as the admission replicates — no restart on its side.
 
+  In-band admission (optional, no key copying): start an existing writer with
+  --auto-admit and the joiner with --request-writer. The joiner proves it holds
+  the invite over the swarm and is admitted automatically. Treat --auto-admit as
+  making the invite a write capability: only enable it when everyone you give
+  the invite to is trusted to write.
+
 Merging two existing relays (e.g. recovering from a two-founder split):
   1. Stop the node being merged in and dump its events:
        nostr-swarm export --storage ./old-data > events.jsonl
@@ -138,6 +155,8 @@ Environment variables:
   WS_PORT, WS_HOST, STORAGE_PATH, SWARM_TOPIC,
   BOOTSTRAP_KEY (invite or 64-hex; same as --bootstrap),
   ADMIT_WRITERS (comma-separated 64-hex writer keys; same as --admit),
+  REQUEST_WRITER (1/true; same as --request-writer),
+  AUTO_ADMIT (1/true; same as --auto-admit),
   RELAY_NAME, RELAY_DESCRIPTION, RELAY_CONTACT, RELAY_PUBKEY,
   MAX_MESSAGE_SIZE, MAX_SUBS, MAX_FILTERS,
   EVENT_RATE, REQ_RATE,
@@ -161,6 +180,8 @@ if (values.storage) relayOverrides.storagePath = values.storage
 if (values.topic) relayOverrides.topic = values.topic
 if (values.bootstrap) relayOverrides.bootstrap = values.bootstrap
 if (values.admit && values.admit.length > 0) relayOverrides.admitWriters = values.admit
+if (values['request-writer']) relayOverrides.requestWriter = true
+if (values['auto-admit']) relayOverrides.autoAdmit = true
 if (values['relay-name']) relayOverrides.relayName = values['relay-name']
 if (values['relay-contact']) relayOverrides.relayContact = values['relay-contact']
 

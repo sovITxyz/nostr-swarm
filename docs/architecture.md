@@ -374,7 +374,7 @@ The founder's Autobase key identifies the multi-writer base; every other node ne
 - **Invite codec** (`src/util/invite.ts`): the base key is shared operator-to-operator as `'nsw1' + z32(version || baseKey || sha256-checksum)`. A corrupted `--bootstrap`/`BOOTSTRAP_KEY` value fails fast at startup -- it can never silently found a fresh, empty base. Raw 64-hex keys are still accepted for scripting. The invite (and this node's writer key) are logged at startup and written to `<storage>/keys.json`.
 - **Persistence guard** (`src/storage/bootstrap.ts`): `resolveBootstrap` records the base identity in `<storage>/bootstrap-key` on first start. From then on the storage directory is pinned to that base: configuring a different bootstrap key is a fatal error, making accidental re-founding impossible. Joining a different base requires a fresh storage path (migrate events with `nostr-swarm export` / `import`).
 
-Exactly one node per swarm starts without a bootstrap (the founder); a two-founder operator error creates a permanent split whose recovery is export/import. There is no in-band key discovery in v1 -- `src/swarm/protocol.ts` carries the complete contract for the v2 in-band admission channel (`nostr-swarm/admission@1`), which a later release can implement without redesign.
+Exactly one node per swarm starts without a bootstrap (the founder); a two-founder operator error creates a permanent split whose recovery is export/import. Baseline admission is operator-driven (`--admit`); the v2 in-band admission channel (`nostr-swarm/admission@1`, contract in `src/swarm/protocol.ts`, implementation in `src/swarm/admission.ts`) is now implemented as an opt-in (`--auto-admit` granter, `--request-writer` joiner) that lets an invite holder prove possession over the swarm and be admitted without a restart.
 
 ### Pear Runtime integration
 
@@ -493,7 +493,8 @@ src/
 │   └── query.ts            Query engine (index selection, range scans)
 ├── swarm/
 │   ├── network.ts          Hyperswarm connection + Autobase replication
-│   └── protocol.ts         v2 in-band admission channel contract (spec) + codec helpers
+│   ├── admission.ts        v2 in-band admission channel (joiner request + granter verify)
+│   └── protocol.ts         v2 admission channel contract (proof + message codec)
 ├── tools/
 │   └── migrate.ts          export/import merge tooling (JSONL over validated WS)
 ├── wot/

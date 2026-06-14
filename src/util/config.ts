@@ -7,6 +7,8 @@ const defaults: RelayConfig = {
 	topic: 'nostr',
 	bootstrap: '',
 	admitWriters: [],
+	requestWriter: false,
+	autoAdmit: false,
 	relayName: 'nostr-swarm',
 	relayDescription: 'A peer-to-peer Nostr relay over Hyperswarm',
 	relayContact: '',
@@ -70,6 +72,8 @@ export function loadConfig(overrides?: Partial<RelayConfig>): RelayConfig {
 		topic: envStr('SWARM_TOPIC', overrides?.topic ?? defaults.topic),
 		bootstrap: envStr('BOOTSTRAP_KEY', overrides?.bootstrap ?? defaults.bootstrap),
 		admitWriters: envList('ADMIT_WRITERS', overrides?.admitWriters ?? defaults.admitWriters),
+		requestWriter: envBool('REQUEST_WRITER', overrides?.requestWriter ?? defaults.requestWriter),
+		autoAdmit: envBool('AUTO_ADMIT', overrides?.autoAdmit ?? defaults.autoAdmit),
 		relayName: envStr('RELAY_NAME', overrides?.relayName ?? defaults.relayName),
 		relayDescription: envStr(
 			'RELAY_DESCRIPTION',

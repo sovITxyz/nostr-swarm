@@ -109,9 +109,9 @@ async listWriters(): Promise<string[]>
 
 Procedural prevention, no election: exactly one node per swarm starts without `--bootstrap`; the persistence guard makes accidental re-founding impossible after first start. Partitions *within* one base heal via Autobase causal merging (replaceable conflicts already resolve deterministically via `shouldReplace`). Merging two already-populated bases is an explicit operator action using new CLI tools: `nostr-swarm export --storage <dir>` dumps all events as JSONL from a read-only view open; the node restarts on a fresh storage path with `--bootstrap`, gets admitted, then `nostr-swarm import --url ws://127.0.0.1:<port>` replays the JSONL through the normal validated WS path. Events are self-certifying and id-deduped in applyPut, so replay is idempotent.
 
-### 3.6 v2 seam: in-band admission channel (documented, not built)
+### 3.6 v2: in-band admission channel (implemented)
 
-`src/swarm/protocol.ts` keeps its encode/decode helpers; its header comment is rewritten to carry this exact contract so v2 needs no redesign:
+Originally specified here as a seam; now implemented in `src/swarm/admission.ts` with the wire contract and proof in `src/swarm/protocol.ts`. Both sides are opt-in (`--auto-admit` granter, `--request-writer` joiner) and default off, so the baseline operator-driven `--admit` flow is unchanged. The contract:
 
 - Protomux channel `nostr-swarm/admission@1` via `Protomux.from(socket)` (coexists with replication on the same muxer; `createChannel` returns null on duplicates — must be handled; all handlers try/caught, since a throw destroys the connection including replication).
 - Handshake (JSON): `{ v: 1, writerKey: <hex64>, wants: 'writer' | 'reader', proof: <hex64> }` where `proof = HMAC-SHA256(key = base.key, data = utf8('nostr-swarm/admit/1') || conn.handshakeHash || writerKeyBytes)` — proof of invite possession, channel-bound to the Noise session (replay-proof), no persistent swarm seed needed.
