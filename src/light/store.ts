@@ -7,6 +7,16 @@ import { WotGraph } from '../wot/graph.js'
 import { ReplicationPolicyEngine } from '../wot/policy.js'
 
 /**
+ * Kinds never pruned or discovery-capped: profiles (0), contact lists (3), and
+ * mute lists (10000) — they are tiny, replaceable, and needed to build the WoT
+ * graph and stay discoverable.
+ */
+const EXEMPT_KINDS = new Set([0, 3, 10000])
+
+/** Max events evicted per prune cycle (keeps a single cycle bounded) */
+const PRUNE_BATCH = 1000
+
+/**
  * Light client wrapper around EventStore.
  *
  * Applies WoT-based filtering to incoming events.
@@ -71,9 +81,8 @@ export class LightStore extends EventEmitter {
 	 * Returns true if the event was accepted, false if rejected.
 	 */
 	async putEvent(event: NostrEvent): Promise<boolean> {
-		// Always accept kind 0 (profiles), kind 3 (contact lists), and kind 10000 (mute lists)
-		// Kind 0 enables discoverability; kinds 3/10000 are needed to build the WoT graph
-		if (event.kind === 0 || event.kind === 3 || event.kind === 10000) {
+		// Always accept profiles/contact lists/mute lists: needed for discovery and WoT
+		if (EXEMPT_KINDS.has(event.kind)) {
 			await this.store.putEvent(event)
 			return true
 		}
@@ -116,19 +125,65 @@ export class LightStore extends EventEmitter {
 	}
 
 	/**
-	 * Warn-once no-op. TTL pruning used to append forged, unsigned kind-5 ops —
-	 * the consensus apply() drops those (signature re-verification), and in a
-	 * shared multi-writer base they would otherwise act as global deletions.
-	 * True local pruning (hypercore clearing) is deferred; until then
-	 * LIGHT_MAX_STORAGE is not enforced and degrades to this warning.
+	 * Enforce LIGHT_MAX_STORAGE by evicting the oldest events via founder-authored
+	 * prune_delete ops (a consensus op, so the view stays convergent — the legacy
+	 * path forged unsigned kind-5 ops that apply() now drops, and that would have
+	 * meant global deletions in a shared base).
+	 *
+	 * This only works on a WRITABLE base (a light client running as its own
+	 * personal-relay founder). A read-only replica cannot soundly mutate the
+	 * shared, autobase-materialized view, so there pruning is a no-op and storage
+	 * is bounded only by WoT ingest filtering — surfaced via a one-time warning.
 	 */
 	async prune(): Promise<void> {
-		if (this.pruneWarningLogged) return
-		this.pruneWarningLogged = true
-		logger.warn(
-			'Light-client TTL pruning is disabled this release; LIGHT_MAX_STORAGE is not enforced',
-			{ maxStorageBytes: this.lightConfig.maxStorageBytes },
-		)
+		if (!this.store.writable) {
+			if (!this.pruneWarningLogged) {
+				this.pruneWarningLogged = true
+				logger.warn(
+					'Light pruning needs a writable (founder) base; LIGHT_MAX_STORAGE is not enforced on a read-only replica',
+					{ maxStorageBytes: this.lightConfig.maxStorageBytes },
+				)
+			}
+			return
+		}
+
+		const max = this.lightConfig.maxStorageBytes
+		if (max <= 0) return
+
+		// Measure stored event bytes and gather non-exempt prune candidates.
+		let totalBytes = 0
+		const candidates: { id: string; createdAt: number; bytes: number }[] = []
+		for await (const entry of this.store.indexes.events.createReadStream()) {
+			const event = entry.value as NostrEvent
+			const bytes = Buffer.byteLength(JSON.stringify(event))
+			totalBytes += bytes
+			if (!EXEMPT_KINDS.has(event.kind)) {
+				candidates.push({ id: event.id, createdAt: event.created_at, bytes })
+			}
+		}
+
+		if (totalBytes <= max) return
+
+		// Evict oldest-first down to 80% of the budget (hysteresis avoids
+		// thrashing), bounded per cycle so a large overage clears incrementally.
+		const target = max * 0.8
+		candidates.sort((a, b) => a.createdAt - b.createdAt)
+		const toDrop: string[] = []
+		let projected = totalBytes
+		for (const c of candidates) {
+			if (projected <= target || toDrop.length >= PRUNE_BATCH) break
+			toDrop.push(c.id)
+			projected -= c.bytes
+		}
+
+		if (toDrop.length > 0) {
+			await this.store.pruneEvents(toDrop)
+			logger.info('Pruned events to honor storage budget', {
+				dropped: toDrop.length,
+				beforeBytes: totalBytes,
+				maxBytes: max,
+			})
+		}
 	}
 
 	/** Count stored events for a pubkey, excluding exempt kinds (0, 3, 10000). */
@@ -144,7 +199,7 @@ export class LightStore extends EventEmitter {
 			if (!eventEntry) continue
 
 			const event = eventEntry.value as NostrEvent
-			if (event.kind === 0 || event.kind === 3 || event.kind === 10000) continue
+			if (EXEMPT_KINDS.has(event.kind)) continue
 			count++
 		}
 		return count

@@ -543,8 +543,9 @@ describe('EventStore', () => {
 				store.base.once('interrupt', resolve)
 			})
 
-			// Append throws 'Autobase is closing' once the interrupt lands
-			await store.base.append({ type: 'put', event, v: 2 }).catch(() => {})
+			// Append throws 'Autobase is closing' once the interrupt lands.
+			// v:3 is above CONSENSUS_VERSION (2), so apply must halt.
+			await store.base.append({ type: 'put', event, v: 3 }).catch(() => {})
 
 			await expect(interrupted).resolves.toBe('unsupported op version')
 		})

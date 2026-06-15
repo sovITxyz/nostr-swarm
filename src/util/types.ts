@@ -34,6 +34,25 @@ export type StoreOp =
 	| { type: 'delete'; event: NostrEvent; v?: number }
 	/** Admit a writer: key = the joiner's base.local.key as 64 lowercase hex */
 	| { type: 'add_writer'; key: string; v?: number }
+	/**
+	 * Reclaim expired events (NIP-40). ids = event ids whose declared expiration
+	 * has passed. Founder-authored only; carries v:2 (consensus rule added in
+	 * CONSENSUS_VERSION 2). apply() removes only events that declared an
+	 * expiration, so it cannot be used to censor arbitrary events.
+	 */
+	| { type: 'expiry_delete'; ids: string[]; v?: number }
+	/**
+	 * Set a base-wide consensus config flag. Founder-authored only; carries v:2.
+	 * Used to opt the whole base into accepting self-verifying optimistic writes.
+	 */
+	| { type: 'set_config'; key: string; value: boolean; v?: number }
+	/**
+	 * Storage-pressure reclaim (light-client personal relays). ids = event ids
+	 * to drop. Founder-authored only; carries v:2. Unlike expiry_delete it has no
+	 * expiration requirement — it is the base owner evicting its own oldest data
+	 * to honor a storage budget.
+	 */
+	| { type: 'prune_delete'; ids: string[]; v?: number }
 
 /** Client-to-relay message types */
 export type ClientMessage =
@@ -67,6 +86,8 @@ export interface RelayConfig {
 	requestWriter: boolean
 	/** Granter: auto-admit invite-proving joiners over the in-band channel (opt-in; default keeps invite read-only) */
 	autoAdmit: boolean
+	/** Founder: accept self-verifying optimistic writes from non-admitted invite-holders (base-wide consensus policy; default off) */
+	acceptOptimistic: boolean
 	relayName: string
 	relayDescription: string
 	relayContact: string

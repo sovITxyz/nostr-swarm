@@ -6,10 +6,7 @@ export function isProtectedEvent(event: NostrEvent): boolean {
 }
 
 /** Check if a protected event should be rejected based on auth state */
-export function shouldRejectProtected(
-	event: NostrEvent,
-	authPubkey: string | null,
-): boolean {
+export function shouldRejectProtected(event: NostrEvent, authPubkey: string | null): boolean {
 	if (!isProtectedEvent(event)) return false
 	return authPubkey !== event.pubkey
 }
