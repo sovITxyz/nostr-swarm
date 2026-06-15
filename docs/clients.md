@@ -207,7 +207,7 @@ await base.append({ type: 'delete', event: signedKind5Event })
 
 ### The apply function
 
-The apply function **must be identical** across all peers -- relay nodes and Pear clients alike. It is what guarantees that every peer produces the same Hyperbee from the same set of inputs. The canonical implementation is in `src/storage/store.ts` (`EventStore.apply`): a versioned consensus protocol (`CONSENSUS_VERSION = 1`) that re-verifies every event signature, scopes deletion tombstones to the deleter's pubkey, skips NIP-70 protected events, and processes `add_writer` admissions. All peers of one base must run the same consensus version -- ops from a newer version halt the node rather than diverge.
+The apply function **must be identical** across all peers -- relay nodes and Pear clients alike. It is what guarantees that every peer produces the same Hyperbee from the same set of inputs. The canonical implementation is in `src/storage/store.ts` (`EventStore.apply`): a versioned consensus protocol (`CONSENSUS_VERSION = 2`) that re-verifies every event signature, scopes deletion tombstones to the deleter's pubkey, skips NIP-70 protected events, processes `add_writer` admissions, applies the founder-only `expiry_delete` / `prune_delete` / `set_config` ops, and honors self-verifying optimistic puts when the base's `accept_optimistic` flag is set. All peers of one base must run the same consensus version -- ops from a newer version halt the node rather than diverge.
 
 If a Pear client uses a different apply function, its view will diverge from the relay nodes. This is fine for read-only secondary views (e.g. a UI-specific index), but the primary Autobase apply must match.
 

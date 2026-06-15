@@ -69,7 +69,7 @@ Storage path is configured via `--storage` or `STORAGE_PATH` (default: `./nostr-
 
 ### Autobase
 
-`Autobase` sits on top of Corestore and solves the multi-writer problem. Each admitted writer appends operations (`put`, `delete`, or `add_writer`) to its own local Hypercore. Autobase reads all writers' cores, applies a deterministic linearization algorithm, and feeds the ordered operations into an `apply` function that builds the materialized view. Non-writers replicate the same cores and run the same apply, so they materialize the full view read-only.
+`Autobase` sits on top of Corestore and solves the multi-writer problem. Each admitted writer appends operations (`put`, `delete`, `add_writer`, and the founder-only v2 ops `expiry_delete`, `prune_delete`, and `set_config`) to its own local Hypercore; non-admitted invite-holders can additionally emit a single self-verifying optimistic `put` (see below). Autobase reads all writers' cores, applies a deterministic linearization algorithm, and feeds the ordered operations into an `apply` function that builds the materialized view. Non-writers replicate the same cores and run the same apply, so they materialize the full view read-only.
 
 The critical property: **every peer running the same apply function on the same set of inputs produces the exact same view**, regardless of the order they received the data. This is what makes the system eventually consistent without any coordination protocol.
 
@@ -130,7 +130,7 @@ The EventStore also exposes the multi-writer surface: `writable` (can this node 
 
 ### The apply function
 
-The apply function (`EventStore.apply`) is the core of the consensus model -- a **versioned consensus protocol** (`CONSENSUS_VERSION = 1`). Every rule is deterministic and config-free, because all peers of one base re-run it over the same ops and must materialize identical views. All peers of one base must run the same software version; ops carrying a consensus version higher than the local one halt the node (`host.interrupt`) rather than diverge.
+The apply function (`EventStore.apply`) is the core of the consensus model -- a **versioned consensus protocol** (`CONSENSUS_VERSION = 2`). Every rule is deterministic and config-free, because all peers of one base re-run it over the same ops and must materialize identical views. All peers of one base must run the same software version; ops carrying a consensus version higher than the local one halt the node (`host.interrupt`) rather than diverge. (v2 added the `expiry_delete`, `prune_delete`, and `set_config` ops plus the self-verifying optimistic-put path described below.)
 
 ```
 Operations from all writers
@@ -143,7 +143,7 @@ Operations from all writers
          │ ordered batch
          ▼
 ┌─────────────────┐
-│  apply function  │──► Hyperbee view (11 sub-databases)
+│  apply function  │──► Hyperbee view (12 sub-databases)
 └─────────────────┘
 ```
 
@@ -174,13 +174,20 @@ For each operation in the batch (null-valued ack nodes are skipped):
 3. `host.addWriter(key, { indexer: false })` -- **every admission is a non-indexer**. The founder stays the sole indexer, so checkpoint/fast-forward liveness never depends on churny peers. The trade-off: founder loss stalls checkpoints (writes still merge; cold joins linearize slowly), which is why founder storage backups are operationally critical.
 4. The admission is recorded in the `writers` sub as `{ addedBy: <appender's writer key> }`.
 
+**Founder-only v2 ops** (`expiry_delete`, `prune_delete`, `set_config`): each is honored only when `node.from.key` equals the base key (the founder), so a non-founder writer cannot use them to censor or to flip base-wide policy. Honoring a present op is deterministic; the off-band judgment (is it expired? over budget?) is the founder's.
+- `expiry_delete` (NIP-40 reclaim): for each id, remove the event and its indexes -- but only if the stored event actually declared an `expiration` tag, so the op cannot delete non-expiring events.
+- `prune_delete` (storage-pressure reclaim): like `expiry_delete` but drops events regardless of an expiration tag (the base owner evicting its own data; see Web of Trust / light-client pruning).
+- `set_config`: write a base-wide boolean flag (e.g. `accept_optimistic`) into the `config` sub. apply reads these flags deterministically, so every peer gates behavior identically.
+
+**Optimistic put** (non-admitted invite-holders): an optimistic block from a peer that holds only the read invite is routed to a deliberately narrow path that never calls `host.interrupt` on untrusted input and only ever honors a `put`. It is accepted only when the base's `accept_optimistic` config flag is set (founder `--accept-optimistic`) and the event passes the same re-validation and NIP-70 skip as a normal put; it is then made durable via `host.ackWriter` **without** admitting the peer as a writer. With the flag off, the block is rolled back by Autobase.
+
 When the apply rules change (as they did when multi-writer shipped), already-materialized views are not retroactively rewritten: a joiner adopting a legacy founder's base relies on Autobase fast-forward (default on) to inherit the founder's signed view, and only the short un-indexed tail re-applies under the new rules. The cleanest shared bases start from a fresh founder.
 
 `removeIndexes` deletes the replaceable/addressable pointer only when it still references the deleted event id -- deleting a superseded version must not orphan the pointer to its replacement.
 
 ### Index schema
 
-The Hyperbee view is divided into 11 sub-databases, each a separate key-value namespace:
+The Hyperbee view is divided into 12 sub-databases, each a separate key-value namespace:
 
 | Sub-database | Key format | Value | Purpose |
 |---|---|---|---|
@@ -195,6 +202,7 @@ The Hyperbee view is divided into 11 sub-databases, each a separate key-value na
 | `expiration` | `inv_expiry!event_id` | `event_id` | NIP-40 expiration tracking |
 | `deletion` | `event_id` | `{ id: kind5_id, pubkey: deleter }` | Deletion tombstones (pubkey-scoped; legacy values are plain strings) |
 | `writers` | `writer_key_hex` | `{ addedBy: writer_key_hex }` | Admitted writers (founder implicit, never listed) |
+| `config` | flag name | boolean | Base-wide consensus flags (founder-written via `set_config`, e.g. `accept_optimistic`) |
 
 ### Key encoding (`src/util/keys.ts`)
 
