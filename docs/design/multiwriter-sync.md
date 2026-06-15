@@ -75,17 +75,17 @@ Authentication: the 32-byte writer key is itself the capability, exchanged out-o
 
 ### 3.3 Consensus rules in apply()
 
-`apply()` becomes a versioned consensus protocol. `CONSENSUS_VERSION = 1`. Rules, in order, all deterministic and config-free:
+`apply()` becomes a versioned consensus protocol. This shipped at `CONSENSUS_VERSION = 1` and has since been bumped to **`CONSENSUS_VERSION = 2`**, which added the founder-only `expiry_delete` / `prune_delete` / `set_config` ops and the self-verifying optimistic-put path (see §3.4 and §6). Rules, in order, all deterministic and config-free:
 
 1. Null-value nodes (acks): skip.
-2. `op.v !== undefined && op.v > 1` → `host.interrupt('unsupported op version')` — halt rather than diverge.
+2. `op.v !== undefined && op.v > CONSENSUS_VERSION` → `host.interrupt('unsupported op version')` — halt rather than diverge. (Optimistic blocks are the exception: a future-version optimistic op is skipped, never fatal, since it comes from untrusted input.)
 3. `add_writer`: key must match `/^[0-9a-f]{64}$/`; skip if already in `writers` sub or sub size ≥ 64; else `await host.addWriter(Buffer.from(key,'hex'), { indexer: false })` and record `{ addedBy }`.
 4. `put`: `validateEventStructure(event) && verifyEventSignature(event)` or skip (admitted writers cannot bypass WS validation); `isProtected(event)` (NIP-70 `["-"]` tag) → skip; then existing applyPut path (id dedup, tombstone check, indexes). Ephemeral kinds still never stored.
 5. `delete`: validate + verify the kind-5 event itself or skip; per `e`-tag target: if stored, remove only when `target.pubkey === deletion.pubkey`; **always** write tombstone as `{ id: <deletionEventId>, pubkey: <deletion.pubkey> }`; finally store the kind-5 via rule 4.
 6. Tombstone check in applyPut: object tombstones block a put only when `tombstone.pubkey === event.pubkey` (kills the forged-tombstone censorship vector and makes delete-before-put ordering safe). Legacy string tombstones (pre-upgrade single-node data) block unconditionally, preserving old local behavior.
 7. `removeIndexes`: delete the replaceable (`pubkey!kind`) / addressable (`pubkey!kind!dTag`) pointer **only if it still references the deleted event id** (fixes the pointer-orphaning bug at store.ts:221-226).
 
-Supporting changes: the Autobase is constructed with `optimistic: true` **now** (constructor-gated; cannot be retrofitted without a consensus bump). v1's apply never calls `host.ackWriter`, so optimistic blocks are always rolled back — the option is reserved for v2 self-verifying writes from light/Pear peers. `nostr-tools` is pinned exactly to `2.23.3` (`verifyEvent` is now a consensus rule; verifier drift forks views). `'event:stored'` emissions are deduped through a bounded 4096-id LRU (reorg re-application re-fires them). The `indexes` getter (store.ts:48-51) invalidates its cache whenever `base.view` identity changes (fast-forward safety); `WotGraph.rebuild/startRefresh` switch to a `getIndexes: () => IndexSubs` thunk so the WoT refresh timer never holds stale subs.
+Supporting changes: the Autobase is constructed with `optimistic: true` **now** (constructor-gated; cannot be retrofitted without a consensus bump). v1's apply never called `host.ackWriter`, so optimistic blocks were always rolled back. **As of v2 this path is live**: an optimistic `put` from a non-admitted invite-holder is re-validated and made durable via `host.ackWriter` (without admitting the peer as a writer) when the base's `accept_optimistic` config flag is set; otherwise it is still rolled back. `nostr-tools` is pinned exactly to `2.23.3` (`verifyEvent` is now a consensus rule; verifier drift forks views). `'event:stored'` emissions are deduped through a bounded 4096-id LRU (reorg re-application re-fires them). The `indexes` getter (store.ts:48-51) invalidates its cache whenever `base.view` identity changes (fast-forward safety); `WotGraph.rebuild/startRefresh` switch to a `getIndexes: () => IndexSubs` thunk so the WoT refresh timer never holds stale subs.
 
 New `EventStore` surface:
 
@@ -102,7 +102,7 @@ async listWriters(): Promise<string[]>
 
 - **Read-only gate**: before `putEvent/deleteEvent`, `src/ws/handler.ts` replies `["OK", id, false, "blocked: read-only replica awaiting writer admission"]` when `!store.writable`. REQ/COUNT/NIP-11/NIP-42 are untouched — non-writers serve full reads.
 - **NIP-70**: protected events are now rejected unconditionally at the WS edge with `blocked: protected events (NIP-70) are not accepted by replicated relays` (replacing the auth-gated accept at handler.ts:107-109), matching the unconditional apply-side skip — never accept-then-drop, never config-dependent consensus. NIP-70 is removed from `supported_nips`. Rationale: a replicated multi-writer store cannot honor "don't propagate"; NIP-70 explicitly blesses rejection. This is a deliberate behavior change for single-node deployments too.
-- **Light clients are never admitted as writers** (documented rule). `LightStore.prune` becomes a warn-once no-op everywhere: its forged unsigned kind-5 ops (light/store.ts:142-150) would be dropped by apply rule 5 regardless, and in a shared base they'd otherwise be global deletions. `LIGHT_MAX_STORAGE` enforcement degrades to a warning this release; true local pruning (hypercore clearing) is deferred.
+- **Light clients are never admitted as writers** (documented rule). In v1, `LightStore.prune` was a warn-once no-op (its forged unsigned kind-5 ops would be dropped by apply rule 5 regardless, and in a shared base they'd otherwise be global deletions). **As of v2, `LightStore.prune` is implemented**: on a *writable* (founder/personal-relay) base it enforces `LIGHT_MAX_STORAGE` by evicting the oldest events (profiles/contact/mute lists exempt) via founder-authored `prune_delete` consensus ops, so the view stays convergent. On a read-only replica it remains a no-op (surfaced via a one-time warning), since a replica cannot soundly mutate the shared, autobase-materialized view.
 - Replication switches from `corestore.replicate(socket)` to `store.base.replicate(socket)` (network.ts:27) so protomux-wakeup announces writer heads; relay.ts ordering already guarantees the base is ready before connections.
 
 ### 3.5 Split-brain stance
@@ -134,7 +134,7 @@ Trust boundary = the writer set. Possession of the base key grants read replicat
 
 1. **Restart-to-admit UX**: clunky but operator-error-tolerant; Start9 config edits already restart the service. The fully specified §3.6 channel removes it in v2.
 2. **Founder is sole indexer**: founder loss stalls checkpoints/fast-forward (writes still merge; cold joins linearize slowly). Chosen over churn-induced quorum stalls; founder storage backups are documented as operationally critical. Indexer promotion deferred.
-3. **Pear/light clients are read-mostly**: they replicate and read but write via a relay's WS endpoint. `optimistic: true` is reserved now so v2 can add self-verifying optimistic writes without a consensus bump.
+3. **Pear/light clients are read-mostly**: they replicate and read but write via a relay's WS endpoint. `optimistic: true` was reserved in v1 and is now **shipped in v2**: with the founder's `accept_optimistic` flag set, a non-admitted invite-holder can contribute a self-verifying optimistic `put` without ever becoming a writer.
 4. **Two-founder operator error** creates a permanent split; recovery is export/import. No in-band detection in v1.
 5. **Writer set only grows** (no removeWriter — historically buggy upstream; last indexer irremovable); bounded at 64.
 6. **Apply-rule changes on pre-existing logs**: previously stored NIP-70 events and old-format tombstones live in already-materialized views; joiners adopting a legacy founder's base rely on Autobase fast-forward (default on) to inherit the signed view, and only the short un-indexed tail (founder acks at 1s `ackInterval`) re-applies under new rules. Cleanest shared bases start from a fresh founder; documented.
@@ -165,7 +165,7 @@ Each phase is one commit, independently shippable, with a runnable check.
 
 ## 9. Migration for existing deployments
 
-Zero-action upgrade. No `--bootstrap` means a node keeps reopening its own founded base (for an existing base, bootstrap = own `base.key`); first post-upgrade start records `base.key` into `<storagePath>/bootstrap-key` and `keys.json` (recording identity, not changing it). Old logs contain only put/delete ops already validated at the WS layer, and a single-node founder's signed view never reorgs historical state. Behavior changes: NIP-70 protected events are now rejected, and light-client TTL pruning is disabled (§3.4, §6). Start9 backups remain valid; the storage layout only gains `bootstrap-key` and `keys.json`.
+Zero-action upgrade. No `--bootstrap` means a node keeps reopening its own founded base (for an existing base, bootstrap = own `base.key`); first post-upgrade start records `base.key` into `<storagePath>/bootstrap-key` and `keys.json` (recording identity, not changing it). Old logs contain only put/delete ops already validated at the WS layer, and a single-node founder's signed view never reorgs historical state. Behavior changes: NIP-70 protected events are now rejected; light-client TTL pruning was disabled in v1 and is reimplemented in v2 as founder-authored `prune_delete` consensus ops on a writable base (§3.4, §6); v2 also adds NIP-40 expiry reclaim (`expiry_delete`) and opt-in self-verifying optimistic writes. A v2 build requires every node on a shared base to also run v2 (a v2 op halts a v1 node). Start9 backups remain valid; the storage layout only gains `bootstrap-key` and `keys.json`.
 
 ---
 
@@ -239,7 +239,7 @@ Each phase below is self-contained: implementers read this document and the list
 **Deliverables.**
 - package.json pins nostr-tools exactly to "2.23.3" (no caret) — verifyEvent is now a consensus rule
 - Autobase constructed with optimistic: true (reserved; apply never acks optimistic blocks in v1) — decided now because it cannot be retrofitted without a consensus bump
-- apply() put/delete branches re-validate with validateEventStructure + verifyEventSignature and skip invalid ops deterministically; ops carry optional v field, apply calls host.interrupt on v > 1 (CONSENSUS_VERSION = 1)
+- apply() put/delete branches re-validate with validateEventStructure + verifyEventSignature and skip invalid ops deterministically; ops carry optional v field, apply calls host.interrupt on v > CONSENSUS_VERSION (this phase shipped CONSENSUS_VERSION = 1; later bumped to 2 — see §3.3)
 - NIP-70: apply skips ["-"]-tagged events unconditionally; src/ws/handler.ts rejects them unconditionally with 'blocked: protected events (NIP-70) are not accepted by replicated relays' (replacing the auth-gated accept at handler.ts:107-109); NIP-70 removed from supported_nips in src/nostr/nip-11.ts
 - Tombstones become { id: deletionEventId, pubkey: deleterPubkey }; applyPut blocks a put on tombstone only when pubkey matches the event author; legacy string tombstones still block unconditionally (read leniently)
 - removeIndexes deletes replaceable/addressable pointers only if the pointer still references the deleted event id
