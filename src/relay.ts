@@ -179,9 +179,9 @@ export class NostrSwarm {
 	}
 
 	/**
-	 * Periodic NIP-40 cleanup. Expired events are always filtered at query time;
-	 * this additionally reclaims their storage via consensus expiry_delete ops so
-	 * every peer converges. Only the founder issues them (it is the sole indexer,
+	 * Periodic NIP-40 cleanup. The read path (queryFilter/countFilters) already
+	 * skips expired events, so clients never see them; this additionally reclaims
+	 * their storage via consensus expiry_delete ops so every peer converges. Only the founder issues them (it is the sole indexer,
 	 * which avoids duplicate ops from multiple writers); other nodes just
 	 * replicate the result. Bounded per cycle to cap oplog write amplification.
 	 */

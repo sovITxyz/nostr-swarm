@@ -71,6 +71,33 @@ describe('matchFilter', () => {
 		expect(matchFilter({}, event)).toBe(true)
 	})
 
+	it('search matches substring in content (NIP-50)', () => {
+		const { event } = createSignedEvent({ content: 'hello nostr world' })
+		expect(matchFilter({ search: 'nostr' }, event)).toBe(true)
+	})
+
+	it('search is case-insensitive', () => {
+		const { event } = createSignedEvent({ content: 'Hello Nostr World' })
+		expect(matchFilter({ search: 'NOSTR' }, event)).toBe(true)
+		expect(matchFilter({ search: 'hello nostr' }, event)).toBe(true)
+	})
+
+	it('non-matching search returns false', () => {
+		const { event } = createSignedEvent({ content: 'hello nostr world' })
+		expect(matchFilter({ search: 'bitcoin' }, event)).toBe(false)
+	})
+
+	it('filter without search is unaffected', () => {
+		const { event } = createSignedEvent({ kind: 1, content: 'anything' })
+		expect(matchFilter({ kinds: [1] }, event)).toBe(true)
+	})
+
+	it('search combines with other conditions (AND)', () => {
+		const { event } = createSignedEvent({ kind: 1, content: 'hello nostr' })
+		expect(matchFilter({ kinds: [1], search: 'nostr' }, event)).toBe(true)
+		expect(matchFilter({ kinds: [2], search: 'nostr' }, event)).toBe(false)
+	})
+
 	it('multiple conditions are AND', () => {
 		const { event } = createSignedEvent({ kind: 1 })
 		expect(matchFilter({ kinds: [1], since: event.created_at - 10 }, event)).toBe(true)

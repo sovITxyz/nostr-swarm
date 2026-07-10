@@ -1,3 +1,5 @@
+import type Hyperbee from 'hyperbee'
+import { isExpired } from '../nostr/events.js'
 import { matchFilter } from '../nostr/filters.js'
 import { encodeKind, eventKey, invertTimestamp } from '../util/keys.js'
 import type { NostrEvent, NostrFilter } from '../util/types.js'
@@ -18,56 +20,57 @@ export async function queryFilter(
 	const events: NostrEvent[] = []
 	const seen = new Set<string>()
 
-	// Strategy: choose the most selective index, scan, post-filter the rest
+	// Strategy: choose the most selective index, scan every value with a
+	// per-value match cap, then merge-sort newest-first and slice to the limit.
+	// Work is bounded by values × limit.
 
-	if (filter.ids && filter.ids.length > 0) {
-		// Direct ID lookup — O(1) per ID
+	if (filter.ids && filter.ids.length > 0 && filter.ids.every((id) => id.length === 64)) {
+		// Direct ID lookup — O(1) per full-length ID. Prefix or mixed-length id
+		// filters fall through to the scans below, where matchFilter's
+		// startsWith comparison handles them.
 		for (const id of filter.ids) {
-			if (events.length >= limit) break
+			if (seen.has(id)) continue
 			const entry = await subs.events.get(eventKey(id))
-			if (entry && !seen.has(id)) {
-				const event = entry.value as NostrEvent
-				if (matchFilter(filter, event)) {
-					events.push(event)
-					seen.add(id)
-				}
+			if (!entry) continue
+			const event = entry.value as NostrEvent
+			if (isExpired(event)) continue
+			if (matchFilter(filter, event)) {
+				events.push(event)
+				seen.add(id)
 			}
 		}
-		return { events, count: events.length }
+		return finalize(events, limit)
 	}
 
 	if (filter.authors && filter.authors.length > 0 && filter.kinds && filter.kinds.length > 0) {
 		// author+kind index — most selective compound index
 		for (const author of filter.authors) {
 			for (const kind of filter.kinds) {
-				if (events.length >= limit) break
 				const prefix = `${author}!${encodeKind(kind)}`
 				const range = timeRangeForPrefix(prefix, filter.since, filter.until)
 				await scanIndex(subs.authorKind, range, subs.events, filter, events, seen, limit)
 			}
 		}
-		return { events, count: events.length }
+		return finalize(events, limit)
 	}
 
 	if (filter.authors && filter.authors.length > 0) {
 		// author index
 		for (const author of filter.authors) {
-			if (events.length >= limit) break
 			const range = timeRangeForPrefix(author, filter.since, filter.until)
 			await scanIndex(subs.author, range, subs.events, filter, events, seen, limit)
 		}
-		return { events, count: events.length }
+		return finalize(events, limit)
 	}
 
 	if (filter.kinds && filter.kinds.length > 0) {
 		// kind index
 		for (const kind of filter.kinds) {
-			if (events.length >= limit) break
 			const prefix = encodeKind(kind)
 			const range = timeRangeForPrefix(prefix, filter.since, filter.until)
 			await scanIndex(subs.kind, range, subs.events, filter, events, seen, limit)
 		}
-		return { events, count: events.length }
+		return finalize(events, limit)
 	}
 
 	// Check for tag filters
@@ -76,18 +79,17 @@ export async function queryFilter(
 		// Use the first tag filter as the primary index scan
 		const [tagName, tagValues] = tagFilters[0]!
 		for (const tagValue of tagValues) {
-			if (events.length >= limit) break
 			const prefix = `${tagName}!${tagValue}`
 			const range = timeRangeForPrefix(prefix, filter.since, filter.until)
 			await scanIndex(subs.tag, range, subs.events, filter, events, seen, limit)
 		}
-		return { events, count: events.length }
+		return finalize(events, limit)
 	}
 
 	// Fallback: created_at index (global time scan)
 	const range = timeRangeForCreatedAt(filter.since, filter.until)
 	await scanIndex(subs.createdAt, range, subs.events, filter, events, seen, limit)
-	return { events, count: events.length }
+	return finalize(events, limit)
 }
 
 /** Execute multiple filters (OR logic) and deduplicate */
@@ -106,10 +108,7 @@ export async function queryFilters(subs: IndexSubs, filters: NostrFilter[]): Pro
 	}
 
 	// Sort newest-first, then by ID for ties
-	allEvents.sort((a, b) => {
-		if (a.created_at !== b.created_at) return b.created_at - a.created_at
-		return a.id < b.id ? -1 : 1
-	})
+	allEvents.sort(compareNewestFirst)
 
 	return allEvents
 }
@@ -135,20 +134,39 @@ export async function countFilters(subs: IndexSubs, filters: NostrFilter[]): Pro
 
 // ─── Internal Helpers ────────────────────────────────────────────
 
-/** Scan an index sub-db, resolve event IDs, post-filter, collect results */
+/** Newest-first comparator: created_at desc, then id asc for ties */
+function compareNewestFirst(a: NostrEvent, b: NostrEvent): number {
+	if (a.created_at !== b.created_at) return b.created_at - a.created_at
+	return a.id < b.id ? -1 : 1
+}
+
+/** Sort collected events newest-first and truncate to the filter limit */
+function finalize(events: NostrEvent[], limit: number): QueryResult {
+	events.sort(compareNewestFirst)
+	const sliced = events.length > limit ? events.slice(0, limit) : events
+	return { events: sliced, count: sliced.length }
+}
+
+/**
+ * Scan an index sub-db, resolve event IDs, post-filter, collect results.
+ * `matchCap` bounds the matches added by THIS invocation — each index value
+ * gets its own budget so a multi-value filter never starves later values.
+ * `results`/`seen` stay shared across invocations for cross-value dedup.
+ */
 async function scanIndex(
-	indexSub: any,
+	indexSub: Hyperbee,
 	range: Record<string, string>,
-	eventsSub: any,
+	eventsSub: Hyperbee,
 	filter: NostrFilter,
 	results: NostrEvent[],
 	seen: Set<string>,
-	limit: number,
+	matchCap: number,
 ): Promise<void> {
 	const stream = indexSub.createReadStream(range)
+	let matched = 0
 
 	for await (const entry of stream) {
-		if (results.length >= limit) break
+		if (matched >= matchCap) break
 		const eventId = entry.value as string
 		if (seen.has(eventId)) continue
 
@@ -156,9 +174,13 @@ async function scanIndex(
 		if (!eventEntry) continue
 
 		const event = eventEntry.value as NostrEvent
+		// NIP-40: never serve expired-but-not-yet-reclaimed events, and don't
+		// let them consume the match budget.
+		if (isExpired(event)) continue
 		if (matchFilter(filter, event)) {
 			results.push(event)
 			seen.add(eventId)
+			matched++
 		}
 	}
 }

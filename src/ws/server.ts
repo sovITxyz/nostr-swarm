@@ -9,7 +9,12 @@ import type { RelayConfig, RelayInfo } from '../util/types.js'
 import { Connection } from './connection.js'
 import { MessageHandler } from './handler.js'
 
+/** Injected at build time by tsup's `define` (see tsup.config.ts). Undefined under tsx/dev. */
+declare const __PKG_VERSION__: string
+
 function getVersion(): string {
+	// Prefer the build-time constant; `typeof` is ReferenceError-safe when it was never defined.
+	if (typeof __PKG_VERSION__ === 'string') return __PKG_VERSION__
 	try {
 		const __dirname = dirname(fileURLToPath(import.meta.url))
 		const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf-8'))
@@ -90,7 +95,7 @@ export class RelayServer {
 				pubkey: this.config.relayPubkey,
 				contact: this.config.relayContact,
 				// NIP-70 is intentionally absent: protected events are rejected (see ws/handler.ts)
-				supported_nips: [1, 9, 11, 40, 42, 45],
+				supported_nips: [1, 9, 11, 40, 42, 45, 50],
 				software: 'nostr-swarm',
 				version: getVersion(),
 				limitation: {
