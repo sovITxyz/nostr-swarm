@@ -152,6 +152,106 @@ describe('EventStore', () => {
 			})
 			expect(events).toHaveLength(2)
 		})
+
+		it('multi-author + limit returns the globally newest events', async () => {
+			const now = Math.floor(Date.now() / 1000)
+			// Author A (listed FIRST) owns >= limit OLDER events
+			const { event: a1, sk: skA } = createSignedEvent({ created_at: now - 30 })
+			const { event: a2 } = createSignedEvent({ created_at: now - 20, sk: skA })
+			const { event: aNewest } = createSignedEvent({ created_at: now - 10, sk: skA })
+			// Author B owns the single newest event
+			const { event: bNewest } = createSignedEvent({ created_at: now })
+			await put(a1, a2, aNewest, bNewest)
+
+			const { events } = await queryFilter(store.indexes, {
+				authors: [a1.pubkey, bNewest.pubkey],
+				limit: 2,
+			})
+			expect(events.map((e) => e.id)).toEqual([bNewest.id, aNewest.id])
+		})
+
+		it('multi-kind + limit returns the globally newest events', async () => {
+			const now = Math.floor(Date.now() / 1000)
+			// Kind 1 (listed FIRST) owns >= limit OLDER events
+			const { event: k1a } = createSignedEvent({ kind: 1, created_at: now - 30 })
+			const { event: k1b } = createSignedEvent({ kind: 1, created_at: now - 20 })
+			const { event: k1Newest } = createSignedEvent({ kind: 1, created_at: now - 10 })
+			// Kind 7 owns the single newest event
+			const { event: k7Newest } = createSignedEvent({ kind: 7, created_at: now })
+			await put(k1a, k1b, k1Newest, k7Newest)
+
+			const { events } = await queryFilter(store.indexes, {
+				kinds: [1, 7],
+				limit: 2,
+			})
+			expect(events.map((e) => e.id)).toEqual([k7Newest.id, k1Newest.id])
+		})
+
+		it('multi-tag-value + limit returns the globally newest events', async () => {
+			const now = Math.floor(Date.now() / 1000)
+			// Tag value 'x' (listed FIRST) owns >= limit OLDER events
+			const { event: x1 } = createSignedEvent({ tags: [['t', 'x']], created_at: now - 30 })
+			const { event: x2 } = createSignedEvent({ tags: [['t', 'x']], created_at: now - 20 })
+			const { event: xNewest } = createSignedEvent({ tags: [['t', 'x']], created_at: now - 10 })
+			// Tag value 'y' owns the single newest event
+			const { event: yNewest } = createSignedEvent({ tags: [['t', 'y']], created_at: now })
+			await put(x1, x2, xNewest, yNewest)
+
+			const { events } = await queryFilter(store.indexes, {
+				'#t': ['x', 'y'],
+				limit: 2,
+			})
+			expect(events.map((e) => e.id)).toEqual([yNewest.id, xNewest.id])
+		})
+
+		it('deduplicates an event matched by multiple tag values', async () => {
+			const { event } = createSignedEvent({
+				tags: [
+					['t', 'x'],
+					['t', 'y'],
+				],
+			})
+			await put(event)
+
+			const { events, count } = await queryFilter(store.indexes, { '#t': ['x', 'y'] })
+			expect(events).toHaveLength(1)
+			expect(count).toBe(1)
+			expect(events[0]!.id).toBe(event.id)
+		})
+
+		it('does not serve expired events on read (NIP-40)', async () => {
+			const now = Math.floor(Date.now() / 1000)
+			// putEvent bypasses the ingest expiration guard
+			const { event: expired } = createSignedEvent({
+				tags: [['expiration', String(now - 3600)]],
+			})
+			await put(expired)
+
+			const { events } = await queryFilter(store.indexes, { ids: [expired.id] })
+			expect(events).toHaveLength(0)
+
+			const count = await countFilters(store.indexes, [{ ids: [expired.id] }])
+			expect(count).toBe(0)
+		})
+
+		it('matches events by id prefix', async () => {
+			const { event } = createSignedEvent({ content: 'find me by prefix' })
+			await put(event)
+
+			const { events } = await queryFilter(store.indexes, { ids: [event.id.slice(0, 10)] })
+			expect(events).toHaveLength(1)
+			expect(events[0]!.id).toBe(event.id)
+		})
+
+		it('filters by NIP-50 search', async () => {
+			const { event: match } = createSignedEvent({ content: 'contains the needleterm here' })
+			const { event: other } = createSignedEvent({ content: 'nothing to see' })
+			await put(match, other)
+
+			const { events } = await queryFilter(store.indexes, { search: 'needleterm' })
+			expect(events).toHaveLength(1)
+			expect(events[0]!.id).toBe(match.id)
+		})
 	})
 
 	describe('replaceable events', () => {

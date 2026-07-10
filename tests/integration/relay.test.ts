@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type WebSocket from 'ws'
 import type { NostrSwarm } from '../../src/relay.js'
@@ -98,6 +99,23 @@ describe('relay integration', () => {
 		ws.send(JSON.stringify(['INVALID_TYPE']))
 		const msg = await waitForMessage(ws)
 		expect(msg[0]).toBe('NOTICE')
+	})
+
+	it('serves NIP-11 relay information document with correct version and NIPs', async () => {
+		const pkg = JSON.parse(
+			readFileSync(new URL('../../package.json', import.meta.url), 'utf-8'),
+		) as { version: string }
+
+		const res = await fetch(`http://127.0.0.1:${relay.config.port}`, {
+			headers: { Accept: 'application/nostr+json' },
+		})
+		expect(res.status).toBe(200)
+		expect(res.headers.get('content-type')).toBe('application/nostr+json')
+
+		const info = (await res.json()) as { version: string; supported_nips: number[] }
+		expect(info.version).toBe(pkg.version)
+		expect(info.supported_nips).toContain(50)
+		expect(info.supported_nips).toContain(40)
 	})
 
 	it('live subscription receives new events', async () => {

@@ -96,7 +96,7 @@ export const deletionKey = (deletedEventId: string): string => deletedEventId
 export function prefixRange(prefix: string): { gte: string; lt: string } {
 	return {
 		gte: prefix + SEPARATOR,
-		lt: prefix + '~', // '~' (0x7E) sorts after all hex + separator chars
+		lt: `${prefix}~`, // '~' (0x7E) sorts after all hex + separator chars
 	}
 }
 
@@ -120,9 +120,9 @@ export function timeRange(
 
 	if (since !== undefined) {
 		// since is the oldest timestamp we want — it becomes the lte bound (largest inverted value)
-		bounds.lte = prefix + SEPARATOR + invertTimestamp(since) + '~'
+		bounds.lte = `${prefix + SEPARATOR + invertTimestamp(since)}~`
 	} else {
-		bounds.lt = prefix + '~'
+		bounds.lt = `${prefix}~`
 	}
 
 	return bounds

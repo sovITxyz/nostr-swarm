@@ -44,6 +44,11 @@ export function matchFilter(filter: NostrFilter, event: NostrEvent): boolean {
 		}
 	}
 
+	// NIP-50: simple case-insensitive substring search over content
+	if (filter.search && !event.content.toLowerCase().includes(filter.search.toLowerCase())) {
+		return false
+	}
+
 	return true
 }
 
