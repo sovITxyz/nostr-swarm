@@ -49,10 +49,16 @@ function parseFeedRequest(payload: unknown): FeedRequest {
 		limit: clampLimit(record.limit, 20, 100),
 		until: optionalUnixTime(record.until),
 		since: optionalUnixTime(record.since),
-		offset: clampLimit(record.offset, 1, 500) - 1, // clampLimit floors at 1; offset may be 0
+		offset: clampOffset(record.offset),
 		userPubkey: optionalHex64(record.user_pubkey),
 		kinds: rawKinds.length > 0 ? rawKinds.slice(0, 10) : [1, 6],
 	}
+}
+
+/** Boundary-tie skip count; unlike limits it may legitimately be 0 */
+function clampOffset(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0
+	return Math.min(500, Math.floor(value))
 }
 
 /** The user's follow list from their kind-3 contact event */
@@ -137,15 +143,26 @@ async function selectFeedEvents(req: FeedRequest, ctx: VerbContext): Promise<Nos
 
 /**
  * Boundary-offset pagination (Primal semantics): the next page repeats the
- * previous RANGE.since as `until` and skips `offset` already-rendered events
- * sitting exactly on that timestamp.
+ * previous RANGE.since as `until` (or, for the new-notes poll, the previous
+ * `until` as `since`) and skips `offset` already-rendered events sitting
+ * exactly on that boundary timestamp. The desc/id-asc sort keeps tie order
+ * deterministic across requests, so "first `offset` ties" matches what the
+ * client already rendered.
  */
 export function applyPage(events: NostrEvent[], req: FeedRequest): NostrEvent[] {
-	const sorted = [...events].sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : 1))
+	// Enforce the window here too: some sources (e.g. bookmarks by id) can't
+	// push since/until into the relay query
+	const windowed = events.filter(
+		(e) =>
+			(req.until === undefined || e.created_at <= req.until) &&
+			(req.since === undefined || e.created_at >= req.since),
+	)
+	const sorted = windowed.sort((a, b) => b.created_at - a.created_at || (a.id < b.id ? -1 : 1))
+	const boundary = req.until !== undefined ? req.until : req.since
 	let skipped = 0
 	const page: NostrEvent[] = []
 	for (const event of sorted) {
-		if (req.until !== undefined && event.created_at === req.until && skipped < req.offset) {
+		if (boundary !== undefined && event.created_at === boundary && skipped < req.offset) {
 			skipped++
 			continue
 		}
