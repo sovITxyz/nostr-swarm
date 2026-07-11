@@ -1,0 +1,67 @@
+name: nostr-swarm
+
+# relay + shim run from ONE image (built once by the relay service, reused by
+# the shim). The relay's Autobase/Hyperbee storage lives in a named volume;
+# the shim connects to the relay over the internal compose network.
+#
+#   Build + run:   docker compose up --build
+#   Relay:  ws://localhost:3000   Shim: ws://localhost:8801
+#
+# To join an existing base instead of founding a new one, set BOOTSTRAP_KEY on
+# the relay service to the founder's nsw1... invite (see README multi-writer).
+
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: nostr-swarm:local
+    command: ["node", "dist/cli.js"]
+    environment:
+      WS_PORT: "3000"
+      WS_HOST: "0.0.0.0"
+      STORAGE_PATH: /data
+      SWARM_TOPIC: nostr
+      # BOOTSTRAP_KEY: "nsw1..."   # uncomment to JOIN a base instead of founding one
+    ports:
+      - "3000:3000"
+    volumes:
+      - relay-data:/data
+    networks:
+      - swarm
+    restart: unless-stopped
+    healthcheck:
+      # Node core `net` -- no curl/nc needed in the slim image.
+      test: ["CMD", "node", "-e", "require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  shim:
+    # Reuses the image the relay service builds -- no second build.
+    image: nostr-swarm:local
+    command: ["node", "dist/cli.js", "primal-shim"]
+    environment:
+      SHIM_PORT: "8801"
+      SHIM_HOST: "0.0.0.0"
+      # Reach the relay by its compose service name over the shared network.
+      SHIM_RELAY_URL: ws://relay:3000
+      # URL advertised to BROWSERS via get_default_relays -- must be reachable
+      # from the user's machine, NOT the internal `relay` hostname. In front of
+      # nginx+TLS this becomes wss://relay.example.com (see deploy/nginx).
+      SHIM_PUBLIC_RELAY_URL: ws://localhost:3000
+    ports:
+      - "8801:8801"
+    depends_on:
+      relay:
+        condition: service_healthy
+    networks:
+      - swarm
+    restart: unless-stopped
+
+volumes:
+  relay-data:
+
+networks:
+  swarm:

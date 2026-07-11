@@ -1,0 +1,12 @@
+node_modules
+dist
+*-data
+nostr-swarm-data
+primal-shim-data
+.git
+.gitignore
+tests
+docs
+start9
+*.md
+.claude

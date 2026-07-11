@@ -397,13 +397,14 @@ nostr-swarm
 nostr-swarm primal-shim
 ```
 
-Point a primal-web-app checkout at it (`.env`: `PRIMAL_CACHE_URL = "ws://localhost:8801"`, `PRIMAL_PRIORITY_RELAYS = "ws://localhost:3000"`, then `npm run dev -- --port 5173`). Feeds, threads, profiles, publishing, search, and notifications work against the relay; Primal-cloud-only surfaces (trending, Premium, wallet, DMs) degrade to empty states. See [Primal cache shim](docs/primal-shim.md) for details.
+Point a primal-web-app checkout at it (`.env`: `PRIMAL_CACHE_URL = "ws://localhost:8801"`, `PRIMAL_PRIORITY_RELAYS = "ws://localhost:3000"`, then `npm run dev -- --port 5174`). Feeds, threads, profiles, publishing, search, notifications, explore/trending, and direct messages work against the relay; Primal-cloud-only surfaces (Premium, wallet, DVM feeds, live streams) degrade to empty states. See [Primal cache shim](docs/primal-shim.md) for details, and [Deployment](docs/deployment.md) for running the relay + shim together (Procfile / docker-compose / nginx).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md) -- Internal design, storage layer, replication, and protocol details
 - [Client Architecture](docs/clients.md) -- How WebSocket clients and Pear Runtime clients connect and differ
 - [Primal cache shim](docs/primal-shim.md) -- Using the Primal web app as a UI for this relay
+- [Deployment](docs/deployment.md) -- Running the relay + shim together (Procfile, docker-compose, nginx/TLS)
 - [Web of Trust](docs/web-of-trust.md) -- Trust graph filtering, scoring tiers, and pruning
 - [Start9 Deployment](docs/start9.md) -- Packaging and running on StartOS
 
