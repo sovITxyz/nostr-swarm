@@ -11,7 +11,18 @@ import { clampLimit, optionalHex64, optionalUnixTime } from '../handler.js'
 import { hydrateNotes } from '../hydrate.js'
 import { encodeFeedRange } from '../synth.js'
 
-const MEDIA_URL_REGEX = /https?:\/\/\S+\.(?:png|jpe?g|webp|gif|mp4|mov|webm)/i
+// Anchored at each whitespace-delimited token start so it can only match once
+// per token — linear over the content, unlike an unanchored `\S+\.` which
+// backtracks catastrophically on crafted content (many "http://" runs).
+const MEDIA_URL_TOKEN = /^https?:\/\/\S{1,2048}\.(?:png|jpe?g|webp|gif|mp4|mov|webm)/i
+
+/** True if the note content contains a media URL, in linear time over the content */
+export function hasMediaUrl(content: string): boolean {
+	for (const token of content.split(/\s+/)) {
+		if (token.length <= 4096 && MEDIA_URL_TOKEN.test(token)) return true
+	}
+	return false
+}
 
 interface FeedSpec {
 	id?: string
@@ -132,7 +143,7 @@ async function selectFeedEvents(req: FeedRequest, ctx: VerbContext): Promise<Nos
 			case 'replies':
 				return authored.filter((e) => isReply(e))
 			case 'user_media_thumbnails':
-				return authored.filter((e) => MEDIA_URL_REGEX.test(e.content))
+				return authored.filter((e) => hasMediaUrl(e.content))
 			default:
 				return authored
 		}

@@ -10,7 +10,7 @@ import type { NostrEvent, NostrFilter } from '../../util/types.js'
 import type { LiveVerbHandler, VerbContext, VerbHandler } from '../handler.js'
 import { clampLimit, optionalUnixTime, requireHex64, requireUserEvent } from '../handler.js'
 import { hydrateNotes } from '../hydrate.js'
-import { zapAmountSats } from '../stats.js'
+import { zapAmountSats, zapSenderPubkey } from '../stats.js'
 import {
 	encodeNotification,
 	encodeNotificationSummary,
@@ -47,20 +47,6 @@ interface Classified {
 	/** Event ids the notification page needs rendered (posts, replies) */
 	refIds: string[]
 	refEvents: NostrEvent[]
-}
-
-/** The zap sender is the pubkey of the embedded zap request, not the receipt's */
-function zapSender(receipt: NostrEvent): string | null {
-	try {
-		const description = receipt.tags.find((t) => t[0] === 'description')?.[1]
-		if (!description) return null
-		const request = JSON.parse(description) as { pubkey?: string }
-		return typeof request.pubkey === 'string' && request.pubkey.length === 64
-			? request.pubkey
-			: null
-	} catch {
-		return null
-	}
 }
 
 function firstETag(event: NostrEvent): string | null {
@@ -131,7 +117,7 @@ export function classifyInteraction(
 			}
 		}
 		case 9735: {
-			const sender = zapSender(event)
+			const sender = zapSenderPubkey(event)
 			if (!sender || sender === pubkey) return null
 			const zapped = firstETag(event)
 			if (!zapped || !ownIds.has(zapped)) return null
@@ -291,9 +277,16 @@ export const notificationCounts: LiveVerbHandler = async (payload, ctx, session,
 	)
 	const timer = setInterval(() => void push(), 15_000)
 	timer.unref()
-	session.liveSubs.set(subId, () => {
+	const registered = session.registerLiveSub(subId, () => {
 		clearInterval(timer)
 		unsubscribe()
 	})
+	if (!registered) {
+		// Per-session live-sub cap reached: don't leak the timer/upstream sub.
+		// The EOSE already sent leaves the client with a static (zero) badge.
+		clearInterval(timer)
+		unsubscribe()
+		return
+	}
 	void push()
 }

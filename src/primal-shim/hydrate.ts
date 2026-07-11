@@ -7,6 +7,7 @@
 import { decode } from 'nostr-tools/nip19'
 import type { NostrEvent } from '../util/types.js'
 import type { VerbContext } from './handler.js'
+import { zapSenderPubkey } from './stats.js'
 import {
 	encodeEventStats,
 	encodeFeedRange,
@@ -56,6 +57,16 @@ function chunk<T>(items: T[], size: number): T[][] {
 	return chunks
 }
 
+/**
+ * Caps on second-order references, so a page of attacker-authored events (each
+ * of which may carry hundreds of e/q/p tags) cannot amplify one client request
+ * into an unbounded number of upstream queries against the rate-limited relay.
+ */
+const MAX_REFERENCED_EVENTS = 256
+const MAX_INVOLVED_PUBKEYS = 512
+/** Ids per upstream query — keeps every REQ frame well under the relay's message-size limit */
+const QUERY_ID_CHUNK = 100
+
 export interface HydrateOptions {
 	/** Logged-in user, drives note-actions synthesis */
 	userPubkey?: string | undefined
@@ -73,29 +84,36 @@ export async function* hydrateNotes(
 	// 1. The page's primary events
 	for (const note of notes) yield note
 
-	// 2. Referenced/quoted events (one level), wrapped as kind 10000107
+	// 2. Referenced/quoted events (one level), wrapped as kind 10000107.
+	// Capped: events are attacker-authored and may carry hundreds of refs each.
 	const refIds = new Set<string>()
 	for (const note of notes) {
 		for (const id of extractReferencedIds(note)) {
 			if (!noteIds.has(id)) refIds.add(id)
+			if (refIds.size >= MAX_REFERENCED_EVENTS) break
 		}
+		if (refIds.size >= MAX_REFERENCED_EVENTS) break
 	}
 	const referenced: NostrEvent[] = []
 	if (refIds.size > 0) {
-		for (const ids of chunk([...refIds], 200)) {
+		for (const ids of chunk([...refIds], QUERY_ID_CHUNK)) {
 			const events = await ctx.relay.fetch([{ ids, limit: ids.length }])
 			referenced.push(...events)
 		}
 		for (const event of referenced) yield encodeReferencedEvent(event)
 	}
 
-	// 3. Author metadata for everyone involved
+	// 3. Author metadata for everyone involved (capped like refs)
 	const pubkeys = new Set<string>()
 	for (const event of [...notes, ...referenced]) {
-		for (const pubkey of involvedPubkeys(event)) pubkeys.add(pubkey)
+		for (const pubkey of involvedPubkeys(event)) {
+			pubkeys.add(pubkey)
+			if (pubkeys.size >= MAX_INVOLVED_PUBKEYS) break
+		}
+		if (pubkeys.size >= MAX_INVOLVED_PUBKEYS) break
 	}
 	if (pubkeys.size > 0) {
-		for (const authors of chunk([...pubkeys], 200)) {
+		for (const authors of chunk([...pubkeys], QUERY_ID_CHUNK)) {
 			const profiles = await ctx.relay.fetch([{ kinds: [0], authors, limit: authors.length }])
 			for (const profile of profiles) yield profile
 		}
@@ -110,16 +128,22 @@ export async function* hydrateNotes(
 
 	// 5. The caller's own interactions with the page (like/reply/repost/zap flags)
 	if (opts.userPubkey && notes.length > 0) {
+		const userPubkey = opts.userPubkey
 		const ids = [...noteIds]
-		const own = await ctx.relay.fetch([
-			{ kinds: [1, 6, 7, 9735], authors: [opts.userPubkey], '#e': ids, limit: 500 },
-		])
 		const acted = new Map<
 			string,
 			{ replied: boolean; liked: boolean; reposted: boolean; zapped: boolean }
 		>()
 		for (const id of ids)
 			acted.set(id, { replied: false, liked: false, reposted: false, zapped: false })
+
+		// Reply/like/repost: kinds 1/6/7 are authored by the user directly.
+		// Zaps: kind-9735 receipts are authored by the wallet provider, so query
+		// them by #e and match the sender inside the embedded zap request.
+		const [own, zapReceipts] = await Promise.all([
+			ctx.relay.fetch([{ kinds: [1, 6, 7], authors: [userPubkey], '#e': ids, limit: 500 }]),
+			ctx.relay.fetch([{ kinds: [9735], '#e': ids, limit: 500 }]),
+		])
 		for (const event of own) {
 			for (const tag of event.tags) {
 				if (tag[0] !== 'e' || typeof tag[1] !== 'string') continue
@@ -128,7 +152,14 @@ export async function* hydrateNotes(
 				if (event.kind === 1) entry.replied = true
 				else if (event.kind === 6) entry.reposted = true
 				else if (event.kind === 7) entry.liked = true
-				else if (event.kind === 9735) entry.zapped = true
+			}
+		}
+		for (const receipt of zapReceipts) {
+			if (zapSenderPubkey(receipt) !== userPubkey) continue
+			for (const tag of receipt.tags) {
+				if (tag[0] !== 'e' || typeof tag[1] !== 'string') continue
+				const entry = acted.get(tag[1])
+				if (entry) entry.zapped = true
 			}
 		}
 		for (const [event_id, flags] of acted) {

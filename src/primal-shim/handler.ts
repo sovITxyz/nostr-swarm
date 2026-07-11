@@ -58,6 +58,16 @@ export function requireUserEvent(payload: unknown): NostrEvent {
 	return candidate
 }
 
+/**
+ * Cheaply recover the subId from the head of a frame we can't fully parse
+ * (e.g. one over the size limit), so the client's REQ can still be EOSE'd.
+ * Bounded scan — never runs the JSON parser over the oversized payload.
+ */
+export function peekSubId(raw: string): string | null {
+	const match = /^\s*\[\s*"[A-Z]+"\s*,\s*"([^"\\]{1,128})"/.exec(raw.slice(0, 256))
+	return match ? (match[1] ?? null) : null
+}
+
 const HEX64 = /^[0-9a-f]{64}$/
 
 export function requireHex64(value: unknown, name: string): string {
@@ -90,7 +100,15 @@ export class ShimMessageHandler {
 
 	async handle(session: Session, raw: string): Promise<void> {
 		if (raw.length > this.services.config.maxMessageSize) {
-			session.send(['NOTICE', 'error: message too large'])
+			// Recover the subId from the frame prefix so the client's REQ still
+			// gets its mandatory EOSE and doesn't hang; fall back to a bare NOTICE
+			const subId = peekSubId(raw)
+			if (subId) {
+				session.sendNotice(subId, 'error: message too large')
+				session.sendEose(subId)
+			} else {
+				session.send(['NOTICE', 'error: message too large'])
+			}
 			return
 		}
 
@@ -103,7 +121,12 @@ export class ShimMessageHandler {
 		}
 		if (!Array.isArray(msg) || msg.length < 2 || typeof msg[1] !== 'string') return
 		const subId = msg[1]
-		if (subId.length === 0 || subId.length > 128) return
+		if (subId.length === 0) return
+		// A REQ with an over-long subId still needs its EOSE to unblock the client
+		if (subId.length > 128) {
+			if (msg[0] === 'REQ') session.sendEose(subId)
+			return
+		}
 
 		// CLOSE may carry a third element (a cache payload) — tolerated and ignored
 		if (msg[0] === 'CLOSE') {

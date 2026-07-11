@@ -14,13 +14,19 @@ import { buildLiveVerbRegistry, buildVerbRegistry } from './verbs/index.js'
  * Primal web app can run against a nostr-swarm relay. Speaks the cache REQ
  * protocol on the client side and plain NIP-01 upstream.
  */
+/** Ping clients this often; a socket that misses two intervals is terminated */
+const HEARTBEAT_INTERVAL_MS = 30_000
+
 export class PrimalShim {
 	private readonly config: PrimalShimConfig
 	private readonly relay: RelayClient
 	private readonly handler: ShimMessageHandler
 	private readonly sessions = new Set<Session>()
+	/** Sockets that have not answered our ping since the last sweep */
+	private readonly awaitingPong = new WeakSet<WebSocket>()
 	private readonly httpServer: ReturnType<typeof createServer>
 	private readonly wss: WebSocketServer
+	private heartbeat: ReturnType<typeof setInterval> | null = null
 
 	constructor(config: PrimalShimConfig) {
 		this.config = config
@@ -50,6 +56,10 @@ export class PrimalShim {
 	async start(): Promise<void> {
 		await this.relay.connect()
 		logger.info('Connected to upstream relay', { url: this.config.relayUrl })
+		// Reap dead (half-open) client sockets so their sessions, polling
+		// intervals and relay-side sub slots don't leak indefinitely
+		this.heartbeat = setInterval(() => this.sweepIdle(), HEARTBEAT_INTERVAL_MS)
+		this.heartbeat.unref()
 		return new Promise((resolve, reject) => {
 			this.httpServer.once('error', reject)
 			this.httpServer.listen(this.config.port, this.config.host, () => {
@@ -63,9 +73,33 @@ export class PrimalShim {
 		})
 	}
 
+	private sweepIdle(): void {
+		for (const session of this.sessions) {
+			const ws = session.socket
+			if (this.awaitingPong.has(ws)) {
+				// No pong since the last sweep — the socket is dead
+				this.awaitingPong.delete(ws)
+				ws.terminate()
+				continue
+			}
+			this.awaitingPong.add(ws)
+			try {
+				ws.ping()
+			} catch {
+				// send failed; the close/error handler will clean up
+			}
+		}
+	}
+
 	async stop(): Promise<void> {
+		if (this.heartbeat) {
+			clearInterval(this.heartbeat)
+			this.heartbeat = null
+		}
 		for (const session of this.sessions) {
 			session.close()
+			// Don't wait on a graceful close handshake for a possibly-dead client
+			session.socket.terminate()
 		}
 		this.sessions.clear()
 		this.wss.close()
@@ -97,7 +131,11 @@ export class PrimalShim {
 		this.sessions.add(session)
 		logger.info('Primal client connected', { sessionId: session.id })
 
+		// Any pong or inbound frame proves the socket is alive this interval
+		ws.on('pong', () => this.awaitingPong.delete(ws))
+
 		ws.on('message', (data) => {
+			this.awaitingPong.delete(ws)
 			const raw = typeof data === 'string' ? data : data.toString()
 			this.handler.handle(session, raw).catch((err) => {
 				logger.error('Unhandled error in shim message handler', { error: String(err) })

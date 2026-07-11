@@ -12,6 +12,26 @@ import { LruCache } from './lru.js'
 import { type EventStats, emptyStats } from './synth.js'
 import type { RelayClient } from './upstream.js'
 
+/** Event ids per stats REQ — keeps the #e filter frame well under the relay's size limit */
+const STATS_ID_CHUNK = 100
+
+/**
+ * The zapping user's pubkey — the author of the embedded zap request inside a
+ * kind-9735 receipt, NOT the receipt's own pubkey (that's the wallet provider).
+ */
+export function zapSenderPubkey(zapReceipt: NostrEvent): string | null {
+	try {
+		const description = zapReceipt.tags.find((t) => t[0] === 'description')?.[1]
+		if (!description) return null
+		const request = JSON.parse(description) as { pubkey?: string }
+		return typeof request.pubkey === 'string' && request.pubkey.length === 64
+			? request.pubkey
+			: null
+	} catch {
+		return null
+	}
+}
+
 /** Sats carried by a zap receipt, from the amount tag of the embedded zap request */
 export function zapAmountSats(zapReceipt: NostrEvent): number {
 	try {
@@ -86,11 +106,16 @@ export class StatsService {
 		const fresh = new Map<string, EventStats>()
 		for (const id of uncached) fresh.set(id, emptyStats(id))
 
-		const interactions = await this.relay.fetch([
-			{ kinds: [1, 6, 7, 9735], '#e': uncached, limit: 500 },
-		])
-		for (const event of interactions) {
-			tallyInteraction(event, fresh)
+		// Chunk the #e set so no single REQ frame exceeds the relay's message-size
+		// limit (an oversized frame is dropped with no EOSE, hanging the query).
+		for (let i = 0; i < uncached.length; i += STATS_ID_CHUNK) {
+			const ids = uncached.slice(i, i + STATS_ID_CHUNK)
+			const interactions = await this.relay.fetch([
+				{ kinds: [1, 6, 7, 9735], '#e': ids, limit: 500 },
+			])
+			for (const event of interactions) {
+				tallyInteraction(event, fresh)
+			}
 		}
 		for (const [id, stats] of fresh) {
 			this.cache.set(id, stats)

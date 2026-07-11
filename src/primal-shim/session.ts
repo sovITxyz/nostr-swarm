@@ -5,6 +5,9 @@ import type { WebSocket } from 'ws'
  * One Primal-client WebSocket session. Tracks in-flight verb requests (so a
  * CLOSE or disconnect aborts them) and long-lived subscriptions' cleanups.
  */
+/** Cap on concurrent long-lived subscriptions per client, to bound relay sub-slot use */
+const MAX_LIVE_SUBS_PER_SESSION = 8
+
 export class Session {
 	readonly id: string
 	readonly socket: WebSocket
@@ -37,9 +40,16 @@ export class Session {
 		this.send(['NOTICE', subId, message])
 	}
 
-	/** Register a new in-flight request, aborting any previous one on the same subId */
+	/**
+	 * Register a new in-flight request, superseding any previous work on the
+	 * same subId — aborting a one-shot verb AND tearing down a live verb whose
+	 * cleanup would otherwise leak its timer and upstream subscription when the
+	 * client re-uses the subId (e.g. an account switch re-issuing
+	 * notification_counts).
+	 */
 	beginRequest(subId: string): AbortSignal {
 		this.active.get(subId)?.abort()
+		this.clearLiveSub(subId)
 		const controller = new AbortController()
 		this.active.set(subId, controller)
 		return controller.signal
@@ -50,15 +60,32 @@ export class Session {
 		if (current && current.signal === signal) this.active.delete(subId)
 	}
 
-	/** Client CLOSE: abort the in-flight request and tear down any live sub */
-	cancel(subId: string): void {
-		this.active.get(subId)?.abort()
-		this.active.delete(subId)
+	/** Run and drop the live-sub cleanup for a subId, if any */
+	clearLiveSub(subId: string): void {
 		const cleanup = this.liveSubs.get(subId)
 		if (cleanup) {
 			this.liveSubs.delete(subId)
 			cleanup()
 		}
+	}
+
+	/**
+	 * Register a live-sub cleanup, enforcing the per-session cap. Returns false
+	 * if the cap is already reached (the caller should decline the subscription).
+	 */
+	registerLiveSub(subId: string, cleanup: () => void): boolean {
+		if (!this.liveSubs.has(subId) && this.liveSubs.size >= MAX_LIVE_SUBS_PER_SESSION) {
+			return false
+		}
+		this.liveSubs.set(subId, cleanup)
+		return true
+	}
+
+	/** Client CLOSE: abort the in-flight request and tear down any live sub */
+	cancel(subId: string): void {
+		this.active.get(subId)?.abort()
+		this.active.delete(subId)
+		this.clearLiveSub(subId)
 	}
 
 	close(): void {

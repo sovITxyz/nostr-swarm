@@ -14,6 +14,8 @@ import type { NostrEvent, NostrFilter } from '../util/types.js'
 
 const RECONNECT_MIN_MS = 500
 const RECONNECT_MAX_MS = 10_000
+/** Backoff before re-opening a live sub the relay closed (rate-limit / over-cap) */
+const LIVE_RESUBSCRIBE_MS = 5_000
 const OK_TIMEOUT_MS = 30_000
 const RATE_LIMIT_RETRY_MS = 500
 const MAX_RATE_LIMIT_RETRIES = 10
@@ -196,7 +198,13 @@ class UpstreamSocket {
 					return
 				}
 				if (this.liveSubs.has(subId)) {
-					logger.warn('Upstream closed a live subscription', { label: this.label, reason })
+					// Relay dropped a live sub (rate-limited / over sub-cap). Re-REQ
+					// after a backoff so badge updates recover instead of going dark.
+					logger.warn('Upstream closed a live subscription; will resubscribe', {
+						label: this.label,
+						reason,
+					})
+					this.scheduleLiveResubscribe(subId)
 				}
 				return
 			}
@@ -234,6 +242,19 @@ class UpstreamSocket {
 			throw new Error('upstream relay not connected')
 		}
 		this.ws.send(JSON.stringify(msg))
+	}
+
+	/** Re-open a live sub the relay closed, after a fixed backoff (if still wanted) */
+	private scheduleLiveResubscribe(subId: string): void {
+		setTimeout(() => {
+			const sub = this.liveSubs.get(subId)
+			if (!sub || this.closed || !this.connected) return
+			try {
+				this.send(['REQ', subId, ...sub.filters])
+			} catch {
+				// socket down; the reconnect handler re-sends every live sub
+			}
+		}, LIVE_RESUBSCRIBE_MS).unref()
 	}
 
 	query(filters: NostrFilter[]): Promise<NostrEvent[]> {

@@ -239,6 +239,37 @@ describe('primal-shim integration', () => {
 		expect(actions.find((a) => a.event_id === aliceNote.id)?.replied).toBe(true)
 	})
 
+	it('reports the caller\'s zap as a note action (receipt authored by the wallet, not the user)', async () => {
+		// A real zap receipt is signed by the LNURL/wallet key; the zapping user
+		// only appears inside the embedded zap request in the description tag.
+		const wallet = createSignedEvent({ kind: 0 }) // stand-in wallet identity
+		const zapRequest = { pubkey: alice.pubkey, tags: [['amount', '21000']] }
+		const receipt = createSignedEvent({
+			sk: wallet.sk,
+			kind: 9735,
+			content: '',
+			tags: [
+				['e', bobReply.id],
+				['p', bob.pubkey],
+				['description', JSON.stringify(zapRequest)],
+			],
+		})
+		const ws = await connectClient(relay.config.port)
+		await publishToRelay(ws, receipt.event)
+		ws.close()
+
+		const frames = await cacheReq('multi_kind_thread_view', {
+			event_id: bobReply.id,
+			limit: 100,
+			kinds: [1, 6, 1068, 6969],
+			user_pubkey: alice.pubkey,
+		})
+		const actions = eventsOf(frames, PRIMAL_KIND.noteActions).map(
+			(e) => JSON.parse(e.content) as { event_id: string; zapped: boolean },
+		)
+		expect(actions.find((a) => a.event_id === bobReply.id)?.zapped).toBe(true)
+	})
+
 	it('resolves user_profile with counted stats', async () => {
 		const frames = await cacheReq('user_profile', { pubkey: alice.pubkey })
 		const profile = eventsOf(frames, 0)[0]
