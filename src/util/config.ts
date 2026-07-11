@@ -1,4 +1,4 @@
-import type { LightClientConfig, RelayConfig, WotConfig } from './types.js'
+import type { LightClientConfig, PrimalShimConfig, RelayConfig, WotConfig } from './types.js'
 
 const defaults: RelayConfig = {
 	port: 3000,
@@ -125,6 +125,52 @@ export function loadWotConfig(overrides?: Partial<WotConfig>): WotConfig {
 		discoveryMaxEventsPerPubkey: envInt(
 			'WOT_DISCOVERY_MAX_EVENTS',
 			overrides?.discoveryMaxEventsPerPubkey ?? wotDefaults.discoveryMaxEventsPerPubkey,
+		),
+	}
+}
+
+const shimDefaults: PrimalShimConfig = {
+	port: 8801,
+	host: '0.0.0.0',
+	relayUrl: 'ws://127.0.0.1:3000',
+	publicRelayUrl: '',
+	dataDir: './primal-shim-data',
+	upstreamSockets: 4,
+	statsTtlMs: 30_000,
+	statsCacheSize: 10_000,
+	maxMessageSize: 131072, // 128 KB, matches the relay default
+	queryTimeoutMs: 15_000,
+}
+
+export function loadShimConfig(overrides?: Partial<PrimalShimConfig>): PrimalShimConfig {
+	const relayUrl = envStr('SHIM_RELAY_URL', overrides?.relayUrl ?? shimDefaults.relayUrl)
+	// Browsers can't reach 0.0.0.0/127.x through the page origin's eyes in all
+	// setups; advertise a localhost URL unless explicitly overridden.
+	const publicFallback = relayUrl
+		.replace('://127.0.0.1', '://localhost')
+		.replace('://0.0.0.0', '://localhost')
+	return {
+		port: envInt('SHIM_PORT', overrides?.port ?? shimDefaults.port),
+		host: envStr('SHIM_HOST', overrides?.host ?? shimDefaults.host),
+		relayUrl,
+		publicRelayUrl: envStr('SHIM_PUBLIC_RELAY_URL', overrides?.publicRelayUrl ?? publicFallback),
+		dataDir: envStr('SHIM_DATA_DIR', overrides?.dataDir ?? shimDefaults.dataDir),
+		upstreamSockets: envInt(
+			'SHIM_UPSTREAM_SOCKETS',
+			overrides?.upstreamSockets ?? shimDefaults.upstreamSockets,
+		),
+		statsTtlMs: envInt('SHIM_STATS_TTL_MS', overrides?.statsTtlMs ?? shimDefaults.statsTtlMs),
+		statsCacheSize: envInt(
+			'SHIM_STATS_CACHE_SIZE',
+			overrides?.statsCacheSize ?? shimDefaults.statsCacheSize,
+		),
+		maxMessageSize: envInt(
+			'SHIM_MAX_MESSAGE_SIZE',
+			overrides?.maxMessageSize ?? shimDefaults.maxMessageSize,
+		),
+		queryTimeoutMs: envInt(
+			'SHIM_QUERY_TIMEOUT_MS',
+			overrides?.queryTimeoutMs ?? shimDefaults.queryTimeoutMs,
 		),
 	}
 }

@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 
 import { parseArgs } from 'node:util'
+import { runPrimalShim } from './primal-shim/run.js'
 import { NostrSwarm } from './relay.js'
 import { runExport, runImport } from './tools/migrate.js'
 import { setLogLevel } from './util/logger.js'
 
 // Subcommand dispatch happens before parseArgs: 'export' and 'import' are the
-// two-base merge tools (docs/design/multiwriter-sync.md §3.5) with their own flags.
+// two-base merge tools (docs/design/multiwriter-sync.md §3.5) with their own
+// flags; 'primal-shim' is the long-running Primal cache protocol adapter.
 const argv = process.argv.slice(2)
 if (argv[0] === 'export' || argv[0] === 'import') {
 	await runSubcommand(argv[0], argv.slice(1))
+}
+if (argv[0] === 'primal-shim') {
+	await runPrimalShim(argv.slice(1))
 }
 
 /** Run an export/import subcommand and exit the process (never returns) */
@@ -87,6 +92,7 @@ nostr-swarm - A peer-to-peer Nostr relay over Hyperswarm
 Usage: nostr-swarm [options]
        nostr-swarm export --storage <dir>
        nostr-swarm import --url <ws-url>
+       nostr-swarm primal-shim [options]
 
 Subcommands:
   export --storage <dir>      Dump every valid event from a storage directory
@@ -95,6 +101,9 @@ Subcommands:
                               relay over its normal validated WebSocket path.
                               Exits non-zero on connection failure; duplicate
                               OKs count as success (replay is idempotent).
+  primal-shim [options]       Serve the Primal web app's cache protocol
+                              (default port 8801), answering it from this
+                              relay over NIP-01. See primal-shim --help.
 
 Options:
   -p, --port <number>         WebSocket port (default: 3000)

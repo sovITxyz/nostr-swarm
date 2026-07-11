@@ -157,6 +157,26 @@ export type ReplicationPolicy =
 	| { action: 'accept'; ttl: number | null; discovery?: boolean }
 	| { action: 'reject'; reason: string }
 
+/** Primal cache shim configuration */
+export interface PrimalShimConfig {
+	port: number
+	host: string
+	/** Upstream nostr-swarm relay the shim queries and publishes to */
+	relayUrl: string
+	/** Relay URL advertised to browsers via get_default_relays (defaults to relayUrl) */
+	publicRelayUrl: string
+	/** Directory for shim-local state (notifications seen-until) */
+	dataDir: string
+	/** Parallel upstream query sockets — the relay's rate limits are per connection */
+	upstreamSockets: number
+	/** How long synthesized per-event stats stay cached */
+	statsTtlMs: number
+	statsCacheSize: number
+	maxMessageSize: number
+	/** Per-query upstream timeout */
+	queryTimeoutMs: number
+}
+
 /** Light client configuration */
 export interface LightClientConfig {
 	/** Enable light client mode (sparse replication + WoT filtering) */
