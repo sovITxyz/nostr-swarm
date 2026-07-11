@@ -33,6 +33,9 @@ export const PRIMAL_KIND = {
 	broadcastResponse: 10000149,
 	readsFeeds: 10000152,
 	homeFeeds: 10000153,
+	followerIncrease: 10000157,
+	perSenderStats: 10000118,
+	topicStats: 10000160,
 } as const
 
 /** Wire shape for synthetic events: a NostrEvent-shaped object with empty id/sig */
@@ -155,6 +158,59 @@ export function encodeFeedRange(events: Array<{ id: string; created_at: number }
 		elements: events.map((e) => e.id),
 	}
 	return synthEvent(PRIMAL_KIND.feedRange, JSON.stringify(range))
+}
+
+/**
+ * Feed range with explicit ordering. Explore tabs resolve items ONLY from
+ * `elements` (in this order), and page by the `since` cursor field named by
+ * `order_by`. `since: 0` tells the client there are no more pages.
+ */
+export function encodeCustomFeedRange(opts: {
+	elements: string[]
+	since: number
+	until: number
+	orderBy: string
+}): NostrEvent {
+	return synthEvent(
+		PRIMAL_KIND.feedRange,
+		JSON.stringify({
+			since: opts.since,
+			until: opts.until,
+			order_by: opts.orderBy,
+			elements: opts.elements,
+		}),
+	)
+}
+
+/** kind 10000157: per-pubkey follower-growth ranking used by the explore People tab */
+export function encodeFollowerIncrease(
+	byPubkey: Record<string, { increase: number; ratio: number; count: number }>,
+): NostrEvent {
+	return synthEvent(PRIMAL_KIND.followerIncrease, JSON.stringify(byPubkey))
+}
+
+/** kind 10000160: hashtag frequency dictionary for the explore Topics tab */
+export function encodeTopicStats(counts: Record<string, number>): NostrEvent {
+	return synthEvent(PRIMAL_KIND.topicStats, JSON.stringify(counts))
+}
+
+export interface SenderMessageCount {
+	cnt: number
+	latest_at: number
+	latest_event_id: string
+}
+
+/** kind 10000118: per-sender DM stats (unread count + latest message) */
+export function encodePerSenderStats(byPubkey: Record<string, SenderMessageCount>): NostrEvent {
+	return synthEvent(PRIMAL_KIND.perSenderStats, JSON.stringify(byPubkey))
+}
+
+/**
+ * kind 10000117 DM count: the client reads `cnt` as a TOP-LEVEL field (a
+ * string), not from content — like the notification summary.
+ */
+export function encodeDirectMsgCount(cnt: number): Record<string, unknown> {
+	return { kind: PRIMAL_KIND.directMsgCount, cnt: String(cnt) }
 }
 
 export interface NoteActions {

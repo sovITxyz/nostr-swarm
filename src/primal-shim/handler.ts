@@ -1,6 +1,7 @@
 import { validateEventStructure, verifyEventSignature } from '../nostr/events.js'
 import { logger } from '../util/logger.js'
 import type { NostrEvent, PrimalShimConfig } from '../util/types.js'
+import type { DmReadStore } from './dm-read.js'
 import type { SeenStore } from './seen.js'
 import type { Session } from './session.js'
 import type { StatsService } from './stats.js'
@@ -10,6 +11,7 @@ export interface VerbContext {
 	relay: RelayClient
 	stats: StatsService
 	seen: SeenStore
+	dmRead: DmReadStore
 	config: PrimalShimConfig
 	signal: AbortSignal
 }
@@ -32,6 +34,7 @@ export interface ShimServices {
 	relay: RelayClient
 	stats: StatsService
 	seen: SeenStore
+	dmRead: DmReadStore
 	config: PrimalShimConfig
 }
 

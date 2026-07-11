@@ -2,6 +2,7 @@ import { type IncomingMessage, type ServerResponse, createServer } from 'node:ht
 import { type WebSocket, WebSocketServer } from 'ws'
 import { logger } from '../util/logger.js'
 import type { PrimalShimConfig } from '../util/types.js'
+import { JsonDmReadStore } from './dm-read.js'
 import { ShimMessageHandler } from './handler.js'
 import { JsonSeenStore } from './seen.js'
 import { Session } from './session.js'
@@ -42,6 +43,7 @@ export class PrimalShim {
 					maxEntries: config.statsCacheSize,
 				}),
 				seen: new JsonSeenStore(config.dataDir),
+				dmRead: new JsonDmReadStore(config.dataDir),
 				config,
 			},
 			buildVerbRegistry(),

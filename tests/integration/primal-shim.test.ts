@@ -418,4 +418,102 @@ describe('primal-shim integration', () => {
 		const ack2 = eventsOf(second, PRIMAL_KIND.importResponse)[0]
 		expect(JSON.parse(ack2?.content ?? '{}')).toEqual({ imported: 1, errors: 0 })
 	})
+
+	it('scored returns engagement-ranked trending notes with stats', async () => {
+		const frames = await cacheReq('scored', { selector: 'trending_24h', user_pubkey: bob.pubkey })
+		const notes = eventsOf(frames, 1)
+		// aliceNote has a like + a reply, so it must rank into the trending set
+		expect(notes.map((n) => n.id)).toContain(aliceNote.id)
+		expect(eventsOf(frames, PRIMAL_KIND.eventStats).length).toBeGreaterThan(0)
+	})
+
+	it('explore_topics tallies hashtags into a single dictionary event', async () => {
+		const tagged = createSignedEvent({
+			sk: alice.sk,
+			content: 'love this #nostrswarm',
+			tags: [['t', 'nostrswarm']],
+		})
+		const ws = await connectClient(relay.config.port)
+		await publishToRelay(ws, tagged.event)
+		ws.close()
+
+		const frames = await cacheReq('explore_topics')
+		const topicEvents = eventsOf(frames, PRIMAL_KIND.topicStats)
+		expect(topicEvents).toHaveLength(1)
+		const topics = JSON.parse(topicEvents[0]?.content ?? '{}')
+		expect(topics.nostrswarm).toBeGreaterThanOrEqual(1)
+	})
+
+	it('explore_media returns media notes with a resolving RANGE', async () => {
+		const media = createSignedEvent({
+			sk: bob.sk,
+			content: 'check this out https://cdn.example.com/pic.png',
+		})
+		const ws = await connectClient(relay.config.port)
+		await publishToRelay(ws, media.event)
+		ws.close()
+
+		const frames = await cacheReq('explore_media', { limit: 30, offset: 0 })
+		const ranges = eventsOf(frames, PRIMAL_KIND.feedRange)
+		expect(ranges).toHaveLength(1)
+		const range = JSON.parse(ranges[0]?.content ?? '{}')
+		expect(range.elements).toContain(media.event.id)
+		// The non-media notes must not leak into the media feed
+		expect(range.elements).not.toContain(aliceNote.id)
+	})
+
+	it('serves a DM conversation both directions with a RANGE', async () => {
+		// NIP-04 kind-4 events: ciphertext content, cleartext #p recipient
+		const now = Math.floor(Date.now() / 1000)
+		const aliceToBob = createSignedEvent({
+			sk: alice.sk,
+			kind: 4,
+			content: 'ciphertext-a2b',
+			tags: [['p', bob.pubkey]],
+			created_at: now - 100,
+		})
+		const bobToAlice = createSignedEvent({
+			sk: bob.sk,
+			kind: 4,
+			content: 'ciphertext-b2a',
+			tags: [['p', alice.pubkey]],
+			created_at: now - 50,
+		})
+		const ws = await connectClient(relay.config.port)
+		await publishToRelay(ws, aliceToBob.event)
+		await publishToRelay(ws, bobToAlice.event)
+		ws.close()
+
+		const frames = await cacheReq('get_directmsgs', {
+			receiver: alice.pubkey,
+			sender: bob.pubkey,
+			limit: 20,
+		})
+		const msgs = eventsOf(frames, 4).map((m) => m.id)
+		expect(msgs).toContain(aliceToBob.event.id)
+		expect(msgs).toContain(bobToAlice.event.id)
+		expect(eventsOf(frames, PRIMAL_KIND.feedRange)).toHaveLength(1)
+
+		// Contact list: bob shows up with an unread inbound message
+		const contactFrames = await cacheReq('get_directmsg_contacts', {
+			user_pubkey: alice.pubkey,
+			relation: 'any',
+		})
+		const perSender = eventsOf(contactFrames, PRIMAL_KIND.perSenderStats)[0]
+		const stats = JSON.parse(perSender?.content ?? '{}')
+		expect(stats[bob.pubkey]).toBeDefined()
+		expect(stats[bob.pubkey].cnt).toBeGreaterThanOrEqual(1)
+
+		// After marking read, the unread count clears
+		const reset = createSignedEvent({ sk: alice.sk, kind: 30078, content: '{}' })
+		await cacheReq('reset_directmsg_count', { event_from_user: reset.event, sender: bob.pubkey })
+		const afterFrames = await cacheReq('get_directmsg_contacts', {
+			user_pubkey: alice.pubkey,
+			relation: 'any',
+		})
+		const afterStats = JSON.parse(
+			eventsOf(afterFrames, PRIMAL_KIND.perSenderStats)[0]?.content ?? '{}',
+		)
+		expect(afterStats[bob.pubkey]?.cnt ?? 0).toBe(0)
+	})
 })

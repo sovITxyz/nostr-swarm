@@ -8,6 +8,7 @@ import {
 	requireHex64,
 	requireUserEvent,
 } from '../../src/primal-shim/handler.js'
+import type { DmReadStore } from '../../src/primal-shim/dm-read.js'
 import type { SeenStore } from '../../src/primal-shim/seen.js'
 import { Session } from '../../src/primal-shim/session.js'
 import type { StatsService } from '../../src/primal-shim/stats.js'
@@ -29,6 +30,7 @@ const config: PrimalShimConfig = {
 }
 
 const seenStub: SeenStore = { get: () => 0, set: async () => {} }
+const dmReadStub: DmReadStore = { get: () => 0, set: async () => {} }
 
 function makeSession(): { session: Session; sent: unknown[][] } {
 	const sent: unknown[][] = []
@@ -48,6 +50,7 @@ function makeHandler(verbs: Record<string, VerbHandler>): ShimMessageHandler {
 		relay: {} as RelayClient,
 		stats: {} as StatsService,
 		seen: seenStub,
+		dmRead: dmReadStub,
 		config,
 	}
 	return new ShimMessageHandler(services, new Map(Object.entries(verbs)), new Map())

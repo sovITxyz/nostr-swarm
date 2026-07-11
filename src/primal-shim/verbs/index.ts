@@ -8,11 +8,26 @@
 import type { LiveVerbHandler, VerbHandler } from '../handler.js'
 import { broadcastEvents, importEvents } from './broadcast.js'
 import {
+	directmsgCount,
+	getDirectMsgs,
+	getDirectmsgContacts,
+	resetDirectmsgCount,
+	resetDirectmsgCounts,
+} from './dms.js'
+import {
 	events,
 	parametrizedReplaceableEvent,
 	parametrizedReplaceableEvents,
 	replaceableEvent,
 } from './events.js'
+import {
+	exploreMedia,
+	explorePeople,
+	exploreTopics,
+	exploreZaps,
+	scored,
+	scoredUsers24h,
+} from './explore.js'
 import { feedDirective, longFormContentFeed } from './feeds.js'
 import {
 	getNotifications,
@@ -54,17 +69,12 @@ const stub: VerbHandler = async function* () {}
 
 const STUB_VERBS = [
 	'net_stats',
+	// 'explore' route is disabled in the client; leave it stubbed
 	'explore',
-	'explore_people',
-	'explore_zaps',
-	'explore_media',
-	'explore_topics',
 	'explore_legend_counts',
 	'explore_global_trending_24h',
 	'explore_global_mostzapped_4h',
-	'scored',
 	'scored_users',
-	'scored_users_24h',
 	'get_reads_topics',
 	'get_featured_authors',
 	'creator_paid_tiers',
@@ -73,11 +83,6 @@ const STUB_VERBS = [
 	'get_advanced_feeds',
 	'parse_advanced_search_query',
 	'get_suggested_users',
-	'get_directmsg_contacts',
-	'get_directmsgs',
-	'reset_directmsg_count',
-	'reset_directmsg_counts',
-	'directmsg_count',
 	'mutelists',
 	'allowlist',
 	'parameterized_replaceable_list',
@@ -157,6 +162,20 @@ export function buildVerbRegistry(): Map<string, VerbHandler> {
 	registry.set('user_search', userSearch)
 	registry.set('advanced_feed', advancedFeed)
 
+	// Explore / trending (approximated from relay engagement)
+	registry.set('scored', scored)
+	registry.set('scored_users_24h', scoredUsers24h)
+	registry.set('explore_media', exploreMedia)
+	registry.set('explore_zaps', exploreZaps)
+	registry.set('explore_topics', exploreTopics)
+	registry.set('explore_people', explorePeople)
+
+	// Direct messages (NIP-04, kind 4)
+	registry.set('get_directmsgs', getDirectMsgs)
+	registry.set('get_directmsg_contacts', getDirectmsgContacts)
+	registry.set('reset_directmsg_count', resetDirectmsgCount)
+	registry.set('reset_directmsg_counts', resetDirectmsgCounts)
+
 	// Notifications
 	registry.set('get_notifications', getNotifications)
 	registry.set('get_notifications_seen', getNotificationsSeen)
@@ -175,5 +194,6 @@ export function buildVerbRegistry(): Map<string, VerbHandler> {
 export function buildLiveVerbRegistry(): Map<string, LiveVerbHandler> {
 	const registry = new Map<string, LiveVerbHandler>()
 	registry.set('notification_counts', notificationCounts)
+	registry.set('directmsg_count', directmsgCount)
 	return registry
 }

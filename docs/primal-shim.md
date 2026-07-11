@@ -88,15 +88,24 @@ flags.
 - **Notifications**: replies, mentions, reactions, reposts and zaps on your
   posts, with a live badge counter and seen-state (persisted in the shim's
   data dir)
+- **Explore / trending**: the home-sidebar trending list, and the Explore
+  Media, Zaps, Topics, and People tabs. "Latest" media/zaps/topics are
+  faithful; trending *ranking* is approximated from relay engagement
+  (`likes + reposts + 2·replies + 2·zaps`, or zap sats) since Primal's true
+  network-weighted score isn't reproducible from a plain relay
+- **Direct messages** (NIP-04, kind 4): conversation list, threads, unread
+  badge, and mark-as-read. The shim only moves ciphertext — all
+  encryption/decryption stays in the client; unread watermarks persist in the
+  shim's data dir
 
 ## What degrades (by design, MVP)
 
 Everything else answers with an empty result (`EOSE`), which the web app
-renders as an empty state: explore/trending ranks, DVM feeds, DMs, Premium,
-wallet/NWC, live streams, moderation filter lists, link-preview and media
-metadata. Media uploads use Primal's Blossom HTTP servers, not the cache
-socket — uploads fail with a toast unless you configure a Blossom server in
-the app.
+renders as an empty state: DVM feeds, Premium, wallet/NWC, live streams,
+moderation filter lists, NIP-17 gift-wrapped DMs (the client is NIP-04 only),
+link-preview and media metadata. Media uploads use Primal's Blossom HTTP
+servers, not the cache socket — uploads fail with a toast unless you configure
+a Blossom server in the app.
 
 Two quantitative caveats:
 
