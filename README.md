@@ -397,7 +397,7 @@ nostr-swarm
 nostr-swarm primal-shim
 ```
 
-Point a primal-web-app checkout at it (`.env`: `PRIMAL_CACHE_URL = "ws://localhost:8801"`, `PRIMAL_PRIORITY_RELAYS = "ws://localhost:3000"`, then `npm run dev -- --port 5174`). Feeds, threads, profiles, publishing, search, notifications, explore/trending, and direct messages work against the relay; Primal-cloud-only surfaces (Premium, wallet, DVM feeds, live streams) degrade to empty states. See [Primal cache shim](docs/primal-shim.md) for details, and [Deployment](docs/deployment.md) for running the relay + shim together (Procfile / docker-compose / nginx).
+Point a [swarm-client](https://github.com/sovITxyz/swarm-client) checkout (our primal-web-app fork) at it (`.env`: `PRIMAL_CACHE_URL = "ws://localhost:8801"`, `PRIMAL_PRIORITY_RELAYS = "ws://localhost:3000"`, then `npm run dev -- --port 5174`). Feeds, threads, profiles, publishing, search, notifications, explore/trending, and direct messages work against the relay; Primal-cloud-only surfaces (Premium, wallet, DVM feeds, live streams) degrade to empty states. See [Primal cache shim](docs/primal-shim.md) for details, and [Deployment](docs/deployment.md) for running the relay + shim together (Procfile / docker-compose / nginx).
 
 ## Documentation
 

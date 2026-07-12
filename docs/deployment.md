@@ -6,7 +6,7 @@ The UI experience has three moving parts:
 |---|---|---|
 | **relay** | `nostr-swarm` -- the NIP-01 Nostr relay | `ws://localhost:3000` |
 | **shim** | `nostr-swarm primal-shim` -- Primal cache-protocol adapter | `ws://localhost:8801` |
-| **UI** | [`sovITxyz/primal-web-app`](https://github.com/sovITxyz/primal-web-app) fork (Vite) | dev: `http://localhost:5174` |
+| **UI** | [`sovITxyz/swarm-client`](https://github.com/sovITxyz/swarm-client) (Primal web-app fork, Vite) | dev: `http://localhost:5174` |
 
 The shim answers the proprietary Primal cache protocol from the relay; the UI talks to the shim (`PRIMAL_CACHE_URL`) for feeds and to the relay directly (`PRIMAL_PRIORITY_RELAYS`) for reads/publishing. The UI is a separate repo and is always run/built on its own -- the tooling below covers the relay + shim.
 
@@ -25,7 +25,7 @@ This launches:
 Then start the UI separately from its own checkout:
 
 ```bash
-# primal-web-app/.env
+# swarm-client/.env
 PRIMAL_CACHE_URL       = "ws://localhost:8801"
 PRIMAL_PRIORITY_RELAYS = "ws://localhost:3000"
 
@@ -62,7 +62,7 @@ cache.example.com  ->  127.0.0.1:8801   (shim)
 Because the UI compiles its endpoints in at **build** time (Vite), rebuild it against the public `wss://` URLs after certs are live:
 
 ```bash
-# primal-web-app/.env
+# swarm-client/.env
 PRIMAL_CACHE_URL       = "wss://cache.example.com"
 PRIMAL_PRIORITY_RELAYS = "wss://relay.example.com"
 
