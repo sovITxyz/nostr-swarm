@@ -22,6 +22,7 @@
   "homepage": "https://github.com/sovITxyz/nostr-swarm#readme",
   "scripts": {
     "dev": "tsx src/cli.ts",
+    "dev:shim": "tsx src/cli.ts primal-shim",
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -385,10 +385,26 @@ provider.install() // Sets window.nostr -- clients can now sign events via passk
 
 Register backup passkeys on separate gateways (e.g., keytr.org and nostkey.org) so losing one device doesn't mean losing your key. See the [keytr docs](https://github.com/sovITxyz/keytr) for details on the federated gateway model and recovery flows.
 
+## Primal web UI
+
+The open-source [Primal web app](https://github.com/PrimalHQ/primal-web-app) can be used as a UI for a nostr-swarm relay. Primal's client doesn't read from relays directly -- it speaks to Primal's proprietary caching service -- so nostr-swarm ships a protocol adapter that impersonates that service and answers it from this relay:
+
+```bash
+# Terminal 1: the relay
+nostr-swarm
+
+# Terminal 2: the cache shim (ws://localhost:8801 → ws://127.0.0.1:3000)
+nostr-swarm primal-shim
+```
+
+Point a primal-web-app checkout at it (`.env`: `PRIMAL_CACHE_URL = "ws://localhost:8801"`, `PRIMAL_PRIORITY_RELAYS = "ws://localhost:3000"`, then `npm run dev -- --port 5174`). Feeds, threads, profiles, publishing, search, notifications, explore/trending, and direct messages work against the relay; Primal-cloud-only surfaces (Premium, wallet, DVM feeds, live streams) degrade to empty states. See [Primal cache shim](docs/primal-shim.md) for details, and [Deployment](docs/deployment.md) for running the relay + shim together (Procfile / docker-compose / nginx).
+
 ## Documentation
 
 - [Architecture](docs/architecture.md) -- Internal design, storage layer, replication, and protocol details
 - [Client Architecture](docs/clients.md) -- How WebSocket clients and Pear Runtime clients connect and differ
+- [Primal cache shim](docs/primal-shim.md) -- Using the Primal web app as a UI for this relay
+- [Deployment](docs/deployment.md) -- Running the relay + shim together (Procfile, docker-compose, nginx/TLS)
 - [Web of Trust](docs/web-of-trust.md) -- Trust graph filtering, scoring tiers, and pruning
 - [Start9 Deployment](docs/start9.md) -- Packaging and running on StartOS
 
@@ -400,6 +416,7 @@ Register backup passkeys on separate gateways (e.g., keytr.org and nostkey.org) 
 - **NIP-40** -- Expiration timestamp
 - **NIP-42** -- Authentication
 - **NIP-45** -- Event counts (COUNT)
+- **NIP-50** -- Search (case-insensitive substring match over event content)
 
 **NIP-70 (protected events) is deliberately not supported.** A replicated multi-writer store cannot honor "don't propagate", so events carrying the `["-"]` tag are rejected at the WebSocket edge (`blocked: protected events (NIP-70) are not accepted by replicated relays`) and skipped by the consensus apply function -- never accept-then-drop. NIP-70 explicitly blesses rejection. This applies to single-node deployments too.
 
