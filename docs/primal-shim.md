@@ -41,7 +41,8 @@ nostr-swarm
 nostr-swarm primal-shim            # ws://localhost:8801 → ws://127.0.0.1:3000
 ```
 
-Then point a checkout of primal-web-app at it. Either edit its `.env`:
+Then point a checkout of [swarm-client](https://github.com/sovITxyz/swarm-client)
+(our primal-web-app fork) at it. Either edit its `.env`:
 
 ```
 PRIMAL_PRIORITY_RELAYS = "ws://localhost:3000"
