@@ -1,0 +1,82 @@
+# Production stack for swarm.sovit.xyz — self-contained hardened deploy.
+#
+# Run with ONLY this file (do NOT merge with docker-compose.yml, whose
+# ports:/0.0.0.0 bindings would survive a merge and defeat the loopback pins):
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Designed for ROOTLESS Docker with the pasta network driver (see the deploy
+# runbook). Host networking gives Hyperswarm's UDP DHT a single userspace hop
+# for the best hole-punch; the WS/HTTP listeners are pinned to 127.0.0.1 so only
+# the host's nginx reaches them. Only 80/443 are ever public.
+#
+# Before first run, set RELAY_PUBKEY to the operator's 64-char hex pubkey
+# (public relay metadata, NOT a secret). BOOTSTRAP_KEY is intentionally unset so
+# this node FOUNDS A NEW BASE; WOT_OWNER_PUBKEY is unset so the relay is open.
+
+name: nostr-swarm
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: ["ALL"]
+  security_opt: ["no-new-privileges:true"]
+  pids_limit: 512
+  mem_limit: 1g
+  ulimits:
+    nofile: { soft: 4096, hard: 8192 }
+  restart: unless-stopped
+
+services:
+  relay:
+    <<: *hardening
+    build: { context: ., dockerfile: Dockerfile }
+    image: nostr-swarm:hardened
+    command: ["node", "dist/cli.js"]
+    user: "10001:10001"
+    network_mode: host           # rootless => pasta namespace (single userspace hop)
+    environment:
+      WS_PORT: "3000"
+      WS_HOST: "127.0.0.1"       # WS/HTTP on loopback only; DHT UDP is a separate all-ifaces socket
+      STORAGE_PATH: /data
+      SWARM_TOPIC: nostr
+      RELAY_NAME: "SovIT Swarm Relay"
+      RELAY_DESCRIPTION: "Open peer-to-peer Nostr relay over Hyperswarm"
+      RELAY_CONTACT: "cameron@sovit.xyz"
+      RELAY_PUBKEY: ""           # <-- FILL IN: 64-char hex pubkey of the operator
+      AUTO_ADMIT: "false"
+      ACCEPT_OPTIMISTIC: "false"
+      # BOOTSTRAP_KEY unset -> founds a NEW base. WOT_OWNER_PUBKEY unset -> open relay.
+      # Rate limits use built-in defaults (EVENT_RATE=10/s, REQ_RATE=20/s,
+      # MAX_MESSAGE_SIZE=128KB); override here if abuse appears.
+    volumes:
+      - relay-data:/data
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    healthcheck:
+      test: ["CMD","node","-e","require('net').connect(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+
+  shim:
+    <<: *hardening
+    image: nostr-swarm:hardened
+    command: ["node", "dist/cli.js", "primal-shim"]
+    user: "10001:10001"
+    network_mode: host
+    mem_limit: 512m
+    environment:
+      SHIM_PORT: "8801"
+      SHIM_HOST: "127.0.0.1"
+      SHIM_DATA_DIR: /shim-data                        # writable volume (read-only rootfs!)
+      SHIM_RELAY_URL: "ws://127.0.0.1:3000"            # same pasta namespace -> loopback
+      SHIM_PUBLIC_RELAY_URL: "wss://swarm.sovit.xyz/relay"   # advertised to browsers
+    volumes:
+      - shim-data:/shim-data
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+    depends_on:
+      relay: { condition: service_healthy }
+
+volumes:
+  relay-data:
+  shim-data:
